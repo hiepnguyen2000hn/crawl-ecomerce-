@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crud import audit_log as crud
+from app.crud import results as results_crud
 from app.database import get_db
 from app.providers.manager import ProviderError, provider_manager
 from app.schemas.trends import (
@@ -61,6 +62,16 @@ async def interest_over_time(
             http_status_code=200,
             latency_ms=latency_ms,
         )
+        await results_crud.save_trends_result(
+            db,
+            request_id=request_id,
+            keywords=body.q,
+            geo=body.geo,
+            date_range=response.date_range_used,
+            data_type="TIMESERIES",
+            source=raw.get("_source", "serpapi"),
+            timeline_data=raw.get("interest_over_time"),
+        )
         return response
 
     except ProviderError as exc:
@@ -106,6 +117,16 @@ async def related_queries(
             status="success",
             http_status_code=200,
             latency_ms=latency_ms,
+        )
+        await results_crud.save_trends_result(
+            db,
+            request_id=request_id,
+            keywords=[body.q],
+            geo=body.geo,
+            date_range=response.date_range_used,
+            data_type="RELATED_QUERIES",
+            source=raw.get("_source", "serpapi"),
+            related_queries=raw.get("related_queries"),
         )
         return response
 
