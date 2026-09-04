@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crud import audit_log as crud
 from app.database import get_db
+from app.providers.manager import ProviderError, provider_manager
 from app.schemas.trends import (
     AuditLogEntry,
     RelatedQueriesRequest,
@@ -14,7 +15,6 @@ from app.schemas.trends import (
     TrendsRequest,
     TrendsResponse,
 )
-from app.services.serpapi_client import SerpApiError, serpapi_client
 from app.services.trends_service import TrendsService
 
 router = APIRouter(prefix="/api/v1/trends", tags=["Google Trends"])
@@ -22,7 +22,7 @@ audit_router = APIRouter(prefix="/api/v1/audit-logs", tags=["Audit Logs"])
 
 
 def get_trends_service() -> TrendsService:
-    return TrendsService(serpapi_client)
+    return TrendsService(provider_manager)
 
 
 @router.get("/presets", summary="List available time presets")
@@ -49,7 +49,7 @@ async def interest_over_time(
     endpoint = "/api/v1/trends/interest-over-time"
 
     try:
-        response, req_params, raw, latency_ms = await service.interest_over_time(body, request_id)
+        response, req_params, raw, latency_ms = await service.interest_over_time(body, request_id, db)
 
         await crud.create_log(
             db,
@@ -63,7 +63,7 @@ async def interest_over_time(
         )
         return response
 
-    except SerpApiError as exc:
+    except ProviderError as exc:
         await crud.create_log(
             db,
             request_id=request_id,
@@ -77,7 +77,7 @@ async def interest_over_time(
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"SerpAPI error: {exc}",
+            detail=str(exc),
         ) from exc
 
 
@@ -95,7 +95,7 @@ async def related_queries(
     endpoint = "/api/v1/trends/related-queries"
 
     try:
-        response, req_params, raw, latency_ms = await service.related_queries(body, request_id)
+        response, req_params, raw, latency_ms = await service.related_queries(body, request_id, db)
 
         await crud.create_log(
             db,
@@ -109,7 +109,7 @@ async def related_queries(
         )
         return response
 
-    except SerpApiError as exc:
+    except ProviderError as exc:
         await crud.create_log(
             db,
             request_id=request_id,
@@ -123,7 +123,7 @@ async def related_queries(
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"SerpAPI error: {exc}",
+            detail=str(exc),
         ) from exc
 
 
@@ -153,10 +153,7 @@ async def list_audit_logs(
 
 
 @audit_router.get("/{request_id}", summary="Get single audit log by request_id")
-async def get_audit_log(
-    request_id: str,
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
+async def get_audit_log(request_id: str, db: Annotated[AsyncSession, Depends(get_db)]):
     log = await crud.get_log_by_request_id(db, request_id)
     if not log:
         raise HTTPException(status_code=404, detail="Log not found")

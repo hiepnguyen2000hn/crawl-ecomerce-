@@ -1,5 +1,8 @@
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.providers.manager import ProviderManager
 from app.schemas.trends import (
     InterestPoint,
     RelatedQueriesRequest,
@@ -8,20 +11,15 @@ from app.schemas.trends import (
     TrendsRequest,
     TrendsResponse,
 )
-from app.services.serpapi_client import SerpApiClient, SerpApiError
 
 
 class TrendsService:
-    def __init__(self, client: SerpApiClient):
-        self._client = client
+    def __init__(self, manager: ProviderManager):
+        self._manager = manager
 
     async def interest_over_time(
-        self, req: TrendsRequest, request_id: str
+        self, req: TrendsRequest, request_id: str, db: AsyncSession
     ) -> tuple[TrendsResponse, dict[str, Any], dict[str, Any], int]:
-        """
-        Returns (response, request_params, raw_response, latency_ms).
-        request_params and raw_response are used for audit logging.
-        """
         date_str = req.build_serpapi_date()
         params = {
             "engine": "google_trends",
@@ -33,18 +31,16 @@ class TrendsService:
             "data_type": "TIMESERIES",
         }
 
-        raw, latency_ms = await self._client.search(params)
+        raw, latency_ms = await self._manager.search(params, db)
 
-        interest_data = raw.get("interest_over_time", {})
-        timeline = interest_data.get("timeline_data", [])
-
-        points = []
-        for item in timeline:
-            values = {
-                v["query"]: v.get("value", 0)
-                for v in item.get("values", [])
-            }
-            points.append(InterestPoint(date=item.get("date", ""), values=values))
+        timeline = raw.get("interest_over_time", {}).get("timeline_data", [])
+        points = [
+            InterestPoint(
+                date=item.get("date", ""),
+                values={v["query"]: v.get("value", 0) for v in item.get("values", [])},
+            )
+            for item in timeline
+        ]
 
         response = TrendsResponse(
             request_id=request_id,
@@ -57,7 +53,7 @@ class TrendsService:
         return response, params, raw, latency_ms
 
     async def related_queries(
-        self, req: RelatedQueriesRequest, request_id: str
+        self, req: RelatedQueriesRequest, request_id: str, db: AsyncSession
     ) -> tuple[RelatedQueriesResponse, dict[str, Any], dict[str, Any], int]:
         date_str = req.build_serpapi_date()
         params = {
@@ -68,16 +64,12 @@ class TrendsService:
             "data_type": "RELATED_QUERIES",
         }
 
-        raw, latency_ms = await self._client.search(params)
+        raw, latency_ms = await self._manager.search(params, db)
 
-        related = raw.get("related_queries", {})
-        keyword_data = related.get(req.q, {})
+        keyword_data = raw.get("related_queries", {}).get(req.q, {})
 
         def parse_queries(items: list[dict]) -> list[RelatedQuery]:
-            return [
-                RelatedQuery(query=i.get("query", ""), value=i.get("value", 0))
-                for i in (items or [])
-            ]
+            return [RelatedQuery(query=i.get("query", ""), value=i.get("value", 0)) for i in (items or [])]
 
         response = RelatedQueriesResponse(
             request_id=request_id,
