@@ -7,7 +7,7 @@ import httpx
 from app.config import settings
 
 APIFY_BASE_URL = "https://api.apify.com/v2"
-ACTOR_ID = "igolaizoa~facebook-ad-library-scraper"
+ACTOR_ID = "igolaizola~facebook-ad-library-scraper"
 POLL_INTERVAL = 3   # seconds between status checks
 TIMEOUT = 300       # max wait seconds for actor run
 

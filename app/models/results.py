@@ -1,7 +1,7 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
+from sqlalchemy import DateTime, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -12,10 +12,9 @@ class GoogleTrendsResult(Base):
     __tablename__ = "google_trends_results"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    # Link to audit log for observability (request_id is UUID string)
+    # Logical reference to api_audit_logs.request_id (no FK constraint)
     request_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("api_audit_logs.request_id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -39,9 +38,9 @@ class FacebookAdsResult(Base):
     __tablename__ = "facebook_ads_results"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # Logical reference to api_audit_logs.request_id (no FK constraint)
     request_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("api_audit_logs.request_id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
