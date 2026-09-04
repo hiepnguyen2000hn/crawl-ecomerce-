@@ -8,7 +8,6 @@ from app.models.ai import (
     DEFAULT_SYSTEM_PROMPT,
     DEFAULT_USER_TEMPLATE,
     AiAnalysisResult,
-    AiProviderKey,
     MasterPrompt,
 )
 
@@ -57,43 +56,6 @@ async def update_prompt(
     await db.commit()
     await db.refresh(prompt)
     return prompt
-
-
-# ── AI Provider Keys ───────────────────────────────────────────────────────────
-
-async def add_ai_key(db: AsyncSession, label: str, api_key: str, provider: str = "openrouter") -> AiProviderKey:
-    entry = AiProviderKey(label=label, api_key=api_key, provider=provider)
-    db.add(entry)
-    await db.commit()
-    await db.refresh(entry)
-    return entry
-
-
-async def list_ai_keys(db: AsyncSession, provider: str = "openrouter") -> list[AiProviderKey]:
-    result = await db.execute(
-        select(AiProviderKey).where(AiProviderKey.provider == provider).order_by(AiProviderKey.id)
-    )
-    return list(result.scalars().all())
-
-
-async def toggle_ai_key(db: AsyncSession, key_id: int, is_active: bool) -> AiProviderKey | None:
-    result = await db.execute(select(AiProviderKey).where(AiProviderKey.id == key_id))
-    entry = result.scalar_one_or_none()
-    if entry:
-        entry.is_active = is_active
-        await db.commit()
-        await db.refresh(entry)
-    return entry
-
-
-async def delete_ai_key(db: AsyncSession, key_id: int) -> bool:
-    result = await db.execute(select(AiProviderKey).where(AiProviderKey.id == key_id))
-    entry = result.scalar_one_or_none()
-    if entry:
-        await db.delete(entry)
-        await db.commit()
-        return True
-    return False
 
 
 # ── AI Results ────────────────────────────────────────────────────────────────

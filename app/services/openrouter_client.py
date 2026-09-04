@@ -1,19 +1,14 @@
 import time
-from datetime import datetime, timedelta, timezone
-from typing import Any
 
 import httpx
-from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.ai import AiProviderKey
+from app.config import settings
+from app.providers.in_memory_key_pool import InMemoryKeyPool
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
-COOLDOWN_MINUTES = 5
 MAX_RETRIES = 3
 
-# Curated free models — appended with :free by OpenRouter convention
 FREE_MODELS = [
     "nvidia/nemotron-3.5-lightning:free",
     "thinkingmachines/inkling-small:free",
@@ -35,41 +30,13 @@ class AllAiKeysExhausted(Exception):
     pass
 
 
+# In-memory pool — loaded from env, no DB
+openrouter_key_pool = InMemoryKeyPool(settings.openrouter_api_keys, cooldown_minutes=5)
+
+
 class OpenRouterClient:
-    async def _get_available_key(self, db: AsyncSession) -> AiProviderKey | None:
-        now = datetime.now(timezone.utc)
-        result = await db.execute(
-            select(AiProviderKey)
-            .where(AiProviderKey.is_active == True)
-            .where(AiProviderKey.provider == "openrouter")
-            .where(
-                (AiProviderKey.cooldown_until == None)
-                | (AiProviderKey.cooldown_until <= now)
-            )
-            .order_by(AiProviderKey.usage_count.asc())
-        )
-        return result.scalars().first()
-
-    async def _mark_cooldown(self, db: AsyncSession, key_id: int) -> None:
-        cooldown = datetime.now(timezone.utc) + timedelta(minutes=COOLDOWN_MINUTES)
-        await db.execute(
-            update(AiProviderKey)
-            .where(AiProviderKey.id == key_id)
-            .values(cooldown_until=cooldown, error_count=AiProviderKey.error_count + 1)
-        )
-        await db.commit()
-
-    async def _mark_used(self, db: AsyncSession, key_id: int) -> None:
-        await db.execute(
-            update(AiProviderKey)
-            .where(AiProviderKey.id == key_id)
-            .values(usage_count=AiProviderKey.usage_count + 1, cooldown_until=None)
-        )
-        await db.commit()
-
     async def chat(
         self,
-        db: AsyncSession,
         *,
         system_prompt: str,
         user_message: str,
@@ -79,15 +46,15 @@ class OpenRouterClient:
     ) -> tuple[str, str, int, int, int]:
         """
         Returns (raw_text, model_used, tokens_prompt, tokens_completion, latency_ms).
-        Rotates keys on 429. Raises AllAiKeysExhausted if all keys fail.
+        Rotates keys on 429.
         """
-        tried: set[int] = set()
+        tried: set[str] = set()
 
         for _ in range(MAX_RETRIES):
-            key_entry = await self._get_available_key(db)
-            if key_entry is None or key_entry.id in tried:
-                raise AllAiKeysExhausted("No OpenRouter API key available")
-            tried.add(key_entry.id)
+            api_key = openrouter_key_pool.get_available()
+            if api_key is None or api_key in tried:
+                raise AllAiKeysExhausted("No OpenRouter API key available. Add keys to OPENROUTER_API_KEYS in .env")
+            tried.add(api_key)
 
             payload = {
                 "model": model,
@@ -99,7 +66,7 @@ class OpenRouterClient:
                 "max_tokens": max_tokens,
             }
             headers = {
-                "Authorization": f"Bearer {key_entry.api_key}",
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
                 "HTTP-Referer": "https://crawl-ecomerce.local",
                 "X-Title": "Crawl E-Commerce",
@@ -112,25 +79,20 @@ class OpenRouterClient:
                     latency_ms = int((time.monotonic() - start) * 1000)
 
                     if resp.status_code == 429:
-                        await self._mark_cooldown(db, key_entry.id)
+                        openrouter_key_pool.mark_rate_limited(api_key)
                         continue
 
                     if resp.status_code != 200:
-                        raise OpenRouterError(
-                            f"OpenRouter {resp.status_code}: {resp.text}",
-                            status_code=resp.status_code,
-                        )
+                        raise OpenRouterError(f"OpenRouter {resp.status_code}: {resp.text}", status_code=resp.status_code)
 
                     data = resp.json()
-                    await self._mark_used(db, key_entry.id)
+                    openrouter_key_pool.mark_used(api_key)
 
                     content = data["choices"][0]["message"]["content"]
                     usage = data.get("usage", {})
-                    model_used = data.get("model", model)
-
                     return (
                         content,
-                        model_used,
+                        data.get("model", model),
                         usage.get("prompt_tokens", 0),
                         usage.get("completion_tokens", 0),
                         latency_ms,
@@ -141,23 +103,19 @@ class OpenRouterClient:
 
         raise AllAiKeysExhausted(f"All {len(tried)} OpenRouter key(s) rate-limited")
 
-    async def list_free_models(self, api_key: str) -> list[dict]:
-        """Fetch live free model list from OpenRouter."""
+    async def list_free_models(self) -> list[dict]:
+        api_key = openrouter_key_pool.get_available()
+        if not api_key:
+            return [{"id": m, "name": m} for m in FREE_MODELS]
         headers = {"Authorization": f"Bearer {api_key}"}
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.get(OPENROUTER_MODELS_URL, headers=headers)
                 if resp.status_code != 200:
                     return [{"id": m, "name": m} for m in FREE_MODELS]
-                models = resp.json().get("data", [])
                 return [
-                    {
-                        "id": m["id"],
-                        "name": m.get("name", m["id"]),
-                        "context_length": m.get("context_length", 0),
-                        "pricing": m.get("pricing", {}),
-                    }
-                    for m in models
+                    {"id": m["id"], "name": m.get("name", m["id"]), "context_length": m.get("context_length", 0)}
+                    for m in resp.json().get("data", [])
                     if ":free" in m.get("id", "")
                 ]
         except Exception:

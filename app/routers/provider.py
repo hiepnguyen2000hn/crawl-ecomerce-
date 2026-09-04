@@ -7,29 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.crud import provider as crud
 from app.database import get_db
 from app.providers.account_checker import check_account
+from app.providers.key_pool import serpapi_key_pool
 
 router = APIRouter(prefix="/api/v1/providers", tags=["Providers"])
 
 
-# ---------- Schemas ----------
-
-class KeyIn(BaseModel):
-    label: str
-    api_key: str
-
-
-class KeyOut(BaseModel):
-    id: int
-    label: str
-    api_key: str  # masked on output
-    is_active: bool
-    cooldown_until: str | None
-    usage_count: int
-    error_count: int
-
-    class Config:
-        from_attributes = True
-
+# ── Schemas ───────────────────────────────────────────────────────────────────
 
 class ProxyIn(BaseModel):
     label: str
@@ -53,36 +36,32 @@ class ToggleIn(BaseModel):
     is_active: bool
 
 
-# ---------- Keys ----------
+# ── SerpAPI key status (read-only from .env) ─────────────────────────────────
 
-@router.post("/keys", response_model=KeyOut, status_code=201, summary="Add SerpAPI key")
-async def add_key(body: KeyIn, db: Annotated[AsyncSession, Depends(get_db)]):
-    entry = await crud.add_key(db, label=body.label, api_key=body.api_key)
-    return _mask_key(entry)
-
-
-@router.get("/keys", response_model=list[KeyOut], summary="List all SerpAPI keys")
-async def list_keys(db: Annotated[AsyncSession, Depends(get_db)]):
-    keys = await crud.list_keys(db)
-    return [_mask_key(k) for k in keys]
-
-
-@router.patch("/keys/{key_id}/toggle", response_model=KeyOut, summary="Enable/disable a key")
-async def toggle_key(key_id: int, body: ToggleIn, db: Annotated[AsyncSession, Depends(get_db)]):
-    entry = await crud.toggle_key(db, key_id, body.is_active)
-    if not entry:
-        raise HTTPException(status_code=404, detail="Key not found")
-    return _mask_key(entry)
-
-
-@router.delete("/keys/{key_id}", status_code=204, summary="Delete a key")
-async def delete_key(key_id: int, db: Annotated[AsyncSession, Depends(get_db)]):
-    deleted = await crud.delete_key(db, key_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Key not found")
+@router.get("/status", summary="Check SerpAPI key pool status + remaining searches")
+async def provider_status():
+    pool_status = serpapi_key_pool.status()
+    # Check remaining searches per key (masked)
+    results = []
+    from app.config import settings
+    for i, key in enumerate(settings.serpapi_keys):
+        account = await check_account(key)
+        entry = pool_status[i] if i < len(pool_status) else {}
+        results.append({
+            **entry,
+            "searches_left": account.searches_left,
+            "plan_searches": account.plan_searches,
+            "is_exhausted": account.is_exhausted,
+        })
+    return {
+        "source": ".env → SERPAPI_KEYS",
+        "total_keys": len(settings.serpapi_keys),
+        "keys": results,
+        "note": "To add keys, update SERPAPI_KEYS=key1,key2,key3 in .env and restart"
+    }
 
 
-# ---------- Proxies ----------
+# ── Proxies (still DB-managed — IPs rotate independently of keys) ─────────────
 
 @router.post("/proxies", response_model=ProxyOut, status_code=201, summary="Add proxy")
 async def add_proxy(body: ProxyIn, db: Annotated[AsyncSession, Depends(get_db)]):
@@ -94,7 +73,7 @@ async def list_proxies(db: Annotated[AsyncSession, Depends(get_db)]):
     return await crud.list_proxies(db)
 
 
-@router.patch("/proxies/{proxy_id}/toggle", response_model=ProxyOut, summary="Enable/disable a proxy")
+@router.patch("/proxies/{proxy_id}/toggle", response_model=ProxyOut)
 async def toggle_proxy(proxy_id: int, body: ToggleIn, db: Annotated[AsyncSession, Depends(get_db)]):
     entry = await crud.toggle_proxy(db, proxy_id, body.is_active)
     if not entry:
@@ -102,46 +81,8 @@ async def toggle_proxy(proxy_id: int, body: ToggleIn, db: Annotated[AsyncSession
     return entry
 
 
-@router.delete("/proxies/{proxy_id}", status_code=204, summary="Delete a proxy")
+@router.delete("/proxies/{proxy_id}", status_code=204)
 async def delete_proxy(proxy_id: int, db: Annotated[AsyncSession, Depends(get_db)]):
     deleted = await crud.delete_proxy(db, proxy_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Proxy not found")
-
-
-# ---------- Status ----------
-
-@router.get("/status", summary="Check remaining searches for all SerpAPI keys")
-async def provider_status(db: Annotated[AsyncSession, Depends(get_db)]):
-    keys = await crud.list_keys(db)
-    result = []
-    for k in keys:
-        account = await check_account(k.api_key)
-        result.append({
-            "id": k.id,
-            "label": k.label,
-            "is_active": k.is_active,
-            "searches_left": account.searches_left,
-            "plan_searches": account.plan_searches,
-            "is_exhausted": account.is_exhausted,
-            "cooldown_until": k.cooldown_until.isoformat() if k.cooldown_until else None,
-            "usage_count": k.usage_count,
-            "error_count": k.error_count,
-        })
-    return {"keys": result, "total_keys": len(keys)}
-
-
-# ---------- Helpers ----------
-
-def _mask_key(entry) -> dict:
-    key = entry.api_key
-    masked = key[:6] + "****" + key[-4:] if len(key) > 10 else "****"
-    return KeyOut(
-        id=entry.id,
-        label=entry.label,
-        api_key=masked,
-        is_active=entry.is_active,
-        cooldown_until=entry.cooldown_until.isoformat() if entry.cooldown_until else None,
-        usage_count=entry.usage_count,
-        error_count=entry.error_count,
-    )
