@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crud import provider as crud
 from app.database import get_db
+from app.providers.account_checker import check_account
 
 router = APIRouter(prefix="/api/v1/providers", tags=["Providers"])
 
@@ -106,6 +107,28 @@ async def delete_proxy(proxy_id: int, db: Annotated[AsyncSession, Depends(get_db
     deleted = await crud.delete_proxy(db, proxy_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Proxy not found")
+
+
+# ---------- Status ----------
+
+@router.get("/status", summary="Check remaining searches for all SerpAPI keys")
+async def provider_status(db: Annotated[AsyncSession, Depends(get_db)]):
+    keys = await crud.list_keys(db)
+    result = []
+    for k in keys:
+        account = await check_account(k.api_key)
+        result.append({
+            "id": k.id,
+            "label": k.label,
+            "is_active": k.is_active,
+            "searches_left": account.searches_left,
+            "plan_searches": account.plan_searches,
+            "is_exhausted": account.is_exhausted,
+            "cooldown_until": k.cooldown_until.isoformat() if k.cooldown_until else None,
+            "usage_count": k.usage_count,
+            "error_count": k.error_count,
+        })
+    return {"keys": result, "total_keys": len(keys)}
 
 
 # ---------- Helpers ----------
