@@ -1,8 +1,12 @@
 from contextlib import asynccontextmanager
 
+from arq import create_pool
+from arq.connections import RedisSettings as ArqRedisSettings
 from fastapi import FastAPI
 
+from app.config import settings
 from app.database import init_db
+from app.jobs.store import JobStore
 from app.routers.ads import router as ads_router
 from app.routers.ai import router as ai_router
 from app.routers.provider import router as provider_router
@@ -12,7 +16,12 @@ from app.routers.trends import audit_router, router as trends_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    yield
+    app.state.arq_redis = await create_pool(ArqRedisSettings.from_dsn(settings.redis_url))
+    app.state.job_store = JobStore(app.state.arq_redis, settings.job_ttl_seconds)
+    try:
+        yield
+    finally:
+        await app.state.arq_redis.close()
 
 
 app = FastAPI(

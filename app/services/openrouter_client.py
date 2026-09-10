@@ -64,6 +64,9 @@ class OpenRouterClient:
                 ],
                 "temperature": temperature,
                 "max_tokens": max_tokens,
+                # Không tắt reasoning thì model sinh chain-of-thought dài, ăn hết max_tokens
+                # trước khi kịp in JSON cuối cùng → parse_error ở app/crud/ai.py.
+                "reasoning": {"enabled": False},
             }
             headers = {
                 "Authorization": f"Bearer {api_key}",
