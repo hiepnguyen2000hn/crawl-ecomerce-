@@ -5,6 +5,7 @@ from typing import Any
 import httpx
 
 from app.config import settings
+from app.crawl import budget
 
 APIFY_BASE_URL = "https://api.apify.com/v2"
 ACTOR_ID = "igolaizola~facebook-ad-library-scraper"
@@ -25,7 +26,7 @@ class ApifyClient:
     async def run_actor(self, input_data: dict[str, Any]) -> tuple[list[dict], int]:
         """
         Start actor run, poll until finished, return (items, latency_ms).
-        Raises ApifyError on failure.
+        Raises ApifyError on failure, BudgetExceeded khi chạm trần chi phí.
         """
         if not settings.apify_token:
             raise ApifyError("APIFY_TOKEN not configured")
@@ -33,6 +34,10 @@ class ApifyClient:
         start = time.monotonic()
 
         async with httpx.AsyncClient(headers=self._headers, timeout=30.0) as client:
+            blocked = await budget.guard_before_run(client)
+            if blocked:
+                raise ApifyError(blocked)
+
             # Start the run
             run_resp = await client.post(
                 f"{APIFY_BASE_URL}/acts/{ACTOR_ID}/runs",
@@ -60,7 +65,19 @@ class ApifyClient:
                 if status_resp.status_code != 200:
                     continue
 
-                run_status = status_resp.json().get("data", {}).get("status", "")
+                info = status_resp.json().get("data", {})
+                run_status = info.get("status", "")
+
+                # Trần chi phí kiểm ở MỖI vòng poll, không chỉ lúc kết thúc.
+                # Một actor được gọi maxItems=10 từng trả 2.693 item và tốn $3.98:
+                # `maxItems` là gợi ý, chỉ việc hủy run đang chạy mới chặn được thật.
+                spent = float(info.get("usageTotalUsd") or 0.0)
+                if budget.over_cap(spent):
+                    await budget.abort_run(client, run_id)
+                    raise ApifyError(
+                        f"Đã hủy run {run_id}: chi phí ${spent:.4f} vượt trần "
+                        f"${settings.apify_max_cost_per_run_usd:.2f}"
+                    )
 
                 if run_status == "SUCCEEDED":
                     break

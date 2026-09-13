@@ -11,12 +11,14 @@ from arq import cron, create_pool
 from arq.connections import RedisSettings as ArqRedisSettings
 
 from app.config import settings
+from app.crud import ads as ads_crud
 from app.crud import audit_log as audit_crud
 from app.crud import results as results_crud
 from app.database import AsyncSessionLocal
 from app.jobs.crawl_jobs import run_bol_search, run_reddit_voc, run_shopify_scan
 from app.jobs.store import JobStatus, JobStore
 from app.jobs.watchlist_jobs import run_watchlist_tick
+from app.services import ads_normalize
 from app.services.apify_client import ApifyError, apify_client
 
 
@@ -30,16 +32,34 @@ async def run_facebook_ads_search(ctx: dict, job_id: str, apify_input: dict, req
         try:
             ads, latency_ms = await apify_client.run_actor(apify_input)
 
+            # Chuẩn hoá thành 1 dòng = 1 quảng cáo, TRƯỚC khi ghi audit log — để
+            # log mang theo cả kết quả chuẩn hoá lẫn báo cáo độ phủ trường.
+            # Blob thô vẫn giữ ở facebook_ads_results để dựng lại khi sửa parser.
+            normalized, coverage = ads_normalize.normalize_many(
+                ads,
+                request_id=job_id,
+                matched_query=request_meta.get("query"),
+                default_country=request_meta.get("country") or None,
+            )
+            saved = (
+                await ads_crud.upsert_ads(db, normalized)
+                if normalized
+                else {"total": 0, "inserted": 0, "updated": 0}
+            )
+
             await audit_crud.create_log(
                 db,
                 request_id=job_id,
                 endpoint="/api/v1/ads/search",
                 request_params=apify_input,
-                response_data={"total": len(ads), "items": ads[:5]},
+                # `coverage` cho biết trường nào thật sự map được — lần chạy đầu
+                # tự chỉ ra chỗ cần sửa thay vì phải mò từng bước.
+                response_data={"total": len(ads), "normalized": saved, "coverage": coverage},
                 status="success",
                 http_status_code=200,
                 latency_ms=latency_ms,
             )
+
             await results_crud.save_facebook_ads_result(
                 db,
                 request_id=job_id,
@@ -58,7 +78,14 @@ async def run_facebook_ads_search(ctx: dict, job_id: str, apify_input: dict, req
             await store.set_status(
                 job_id,
                 JobStatus.SUCCEEDED,
-                result={"request_id": job_id, "total_ads": len(ads), "latency_ms": latency_ms},
+                result={
+                    "request_id": job_id,
+                    "total_ads": len(ads),
+                    "ads_new": saved["inserted"],
+                    "ads_updated": saved["updated"],
+                    "field_coverage": coverage,
+                    "latency_ms": latency_ms,
+                },
             )
         except ApifyError as exc:
             await audit_crud.create_log(

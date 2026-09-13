@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crud import ecom as ecom_crud
+from app.crud import ads as ads_crud
 from app.crud import tracking as tracking_crud
 from app.crud import voc as voc_crud
 from app.database import get_db
@@ -209,8 +210,10 @@ async def export_excel(
     price_points = await ecom_crud.list_price_points(db, source=source, limit=limit, offset=0)
     threads = await voc_crud.list_threads(db, limit=1000) if include_voc else []
     velocity = await tracking_crud.review_velocity(db, source=source, limit=limit)
+    ads = await ads_crud.list_ads(db, limit=min(limit, 2000))
+    lps = await ads_crud.landing_pages(db, min_active_days=7, limit=300)
 
-    buf = excel_export.build_workbook(products, price_points, threads, velocity)
+    buf = excel_export.build_workbook(products, price_points, threads, velocity, ads, lps)
     name = excel_export.filename("levelup-crawl")
     return StreamingResponse(
         buf,

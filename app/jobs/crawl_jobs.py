@@ -209,10 +209,16 @@ async def run_reddit_voc(
     threads_per_keyword: int,
     comment_threads: int,
     comments_per_thread: int,
+    sort: str = "relevance",
+    subreddits: list[str] | None = None,
+    min_relevance: float = 0.25,
 ) -> None:
     store: JobStore = ctx["job_store"]
     await store.set_status(job_id, JobStatus.RUNNING)
-    params = {"keywords": keywords, "timeframe": timeframe}
+    params = {
+        "keywords": keywords, "timeframe": timeframe,
+        "sort": sort, "subreddits": subreddits, "min_relevance": min_relevance,
+    }
 
     async with AsyncSessionLocal() as db:
         result = await reddit_client.collect_voc(
@@ -221,6 +227,9 @@ async def run_reddit_voc(
             threads_per_keyword=threads_per_keyword,
             comment_threads=comment_threads,
             comments_per_thread=comments_per_thread,
+            sort=sort,
+            subreddits=subreddits,
+            min_relevance=min_relevance,
         )
 
         threads_saved = comments_saved = 0
@@ -252,6 +261,7 @@ async def run_reddit_voc(
             "cost_usd": round(result.cost_usd, 4),
             "threads_saved": threads_saved,
             "comments_saved": comments_saved,
+            "filter_report": result.filter_report,
             "top_subreddits": result.top_subreddits,
             "latency_ms": result.latency_ms,
         }

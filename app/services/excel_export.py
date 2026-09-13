@@ -73,6 +73,8 @@ def build_workbook(
     price_points: Sequence[Any],
     threads: Sequence[Any] = (),
     velocity: Sequence[dict] = (),
+    ads: Sequence[Any] = (),
+    landing_pages: Sequence[dict] = (),
 ) -> BytesIO:
     wb = Workbook()
 
@@ -132,6 +134,44 @@ def build_workbook(
         money_cols=(8, 9),
         currency_col=7,
     )
+
+    # ── Tín hiệu quảng cáo — SRS Bước 2.1 ───────────────────────────────────
+    # `Ngay chay` (active_days) là bằng chứng mạnh nhất về việc sản phẩm có đang
+    # sinh lời không: đó là tiền của chính đối thủ, không ai đốt ngân sách 60 ngày
+    # cho một mẫu lỗ.
+    if ads:
+        wsa = wb.create_sheet("Tin hieu Ads")
+        _write_sheet(
+            wsa,
+            [
+                "Nha quang cao", "Ngay chay", "Dang chay", "Bat dau", "Ket thuc",
+                "Quoc gia", "Media", "CTA", "So bien the",
+                "Noi dung ads", "Landing page", "Tu khoa khop", "Link Ad Library",
+            ],
+            [
+                (
+                    a.page_name, a.active_days, a.is_active,
+                    a.start_date, a.end_date, a.country,
+                    a.media_type, a.cta_text, a.collation_count,
+                    (a.ad_copy or "")[:500], a.landing_page_url,
+                    a.matched_query, a.ad_library_url,
+                )
+                for a in ads
+            ],
+        )
+
+    # ── Đối thủ nên soi giá — mắt xích Bước 2 sang Bước 3 ───────────────────
+    if landing_pages:
+        wslp = wb.create_sheet("Doi thu can soi gia")
+        _write_sheet(
+            wslp,
+            ["Nha quang cao", "Quoc gia", "Ngay chay dai nhat", "So ads", "Landing page"],
+            [
+                (l["page_name"], l["country"], l["max_active_days"], l["ad_count"],
+                 l["landing_page_url"])
+                for l in landing_pages
+            ],
+        )
 
     # ── Tốc độ bán (proxy thay cho "số đã bán") ─────────────────────────────
     # Sheet này mới là thứ trả lời "sản phẩm nào bán chạy" — xem docstring

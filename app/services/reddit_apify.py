@@ -62,6 +62,8 @@ async def collect(
     timeframe: str = "year",
     max_items: int = 200,
     include_comments: bool = True,
+    sort: str = "relevance",
+    subreddits: list[str] | None = None,
 ) -> tuple[Outcome, list[dict], list[dict], int, float, str | None]:
     """Trả (outcome, threads, comments, latency_ms, cost_usd, error)."""
     if not settings.apify_token:
@@ -73,11 +75,17 @@ async def collect(
         "searchPosts": True,
         "searchComments": include_comments,
         "searchCommunities": False,
-        "searchSort": "top",
+        # `relevance` chứ KHÔNG phải `top`: xếp theo điểm trên phạm vi 1 năm kéo
+        # toàn bài viral của sub khổng lồ lên đầu, bất kể có đúng ngách hay không.
+        "searchSort": sort,
         "searchTime": timeframe,
         "fastMode": False,
         "maxItems": max_items,
     }
+    if subreddits:
+        # Giới hạn trong cộng đồng đã biết là đúng ngách — cách chặn nhiễu hiệu
+        # quả nhất, nhưng đòi phải biết trước tên sub.
+        payload["withinCommunity"] = [s.lstrip("r/").strip() for s in subreddits]
 
     start = time.monotonic()
     try:

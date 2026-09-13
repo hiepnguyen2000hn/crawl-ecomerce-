@@ -9,7 +9,16 @@ Mentioned Competitors là của AI Service — ngoài phạm vi F2.
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -48,6 +57,14 @@ class RedditThread(Base):
 
     matched_keywords: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     """Từ khoá ngách nào đã tìm ra bài này — để AI biết ngữ cảnh khi phân tích."""
+
+    relevance_score: Mapped[float | None] = mapped_column(Numeric(4, 3), nullable=True)
+    """Điểm liên quan tới ngách, 0..1 — do voc_filter chấm sau khi nhận dữ liệu.
+
+    Lưu lại chứ không chỉ dùng để lọc: khi AI phân tích ra kết quả lạ, biết được
+    bài đó vào với điểm bao nhiêu giúp truy nguyên nhanh hơn nhiều."""
+
+    relevance_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     comments_fetched: Mapped[bool] = mapped_column(default=False)
     raw: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

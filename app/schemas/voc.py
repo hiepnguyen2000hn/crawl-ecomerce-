@@ -18,6 +18,18 @@ class RedditVocRequest(BaseModel):
         default=10, ge=0, le=50, description="Số bài tương tác cao nhất sẽ cào bình luận"
     )
     comments_per_thread: int = Field(default=60, ge=1, le=200)
+    sort: str = Field(
+        default="relevance",
+        description="'relevance' (mặc định) | 'top'. 'top' trên 1 năm kéo bài viral của sub lớn lên đầu",
+    )
+    subreddits: list[str] = Field(
+        default_factory=list,
+        description="Giới hạn trong các cộng đồng này, vd ['Baking','Cooking']. Bỏ trống = tìm toàn Reddit",
+    )
+    min_relevance: float = Field(
+        default=0.4, ge=0, le=1,
+        description="Ngưỡng lọc nhiễu sau khi nhận. 0 = tắt lọc",
+    )
 
 
 class RedditVocJobResult(BaseModel):

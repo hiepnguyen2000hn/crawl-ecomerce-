@@ -7,6 +7,7 @@ là bảng đó "đã bị xoá khỏi code" → sinh ra `op.drop_table(...)`.
 Nên: **thêm model mới thì thêm một dòng vào đây.**
 """
 
+from app.models.ads import AdSignal
 from app.models.ai import AiAnalysisResult, AiProviderKey, MasterPrompt
 from app.models.audit_log import ApiAuditLog
 from app.models.ecom import EcomPricePoint, EcomProduct
@@ -16,6 +17,7 @@ from app.models.tracking import CrawlWatchlist, ProductMetricSnapshot
 from app.models.voc import RedditComment, RedditThread
 
 __all__ = [
+    "AdSignal",
     "AiAnalysisResult",
     "AiProviderKey",
     "ApiAuditLog",

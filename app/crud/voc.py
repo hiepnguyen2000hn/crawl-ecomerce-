@@ -22,6 +22,8 @@ _THREAD_UPDATABLE = (
     "upvote_ratio",
     "posted_at",
     "matched_keywords",
+    "relevance_score",
+    "relevance_reason",
     "comments_fetched",
     "raw",
 )
@@ -121,6 +123,8 @@ def thread_to_dict(t: RedditThread) -> dict[str, Any]:
         "score": t.score,
         "num_comments": t.num_comments,
         "matched_keywords": t.matched_keywords,
+        "relevance_score": float(t.relevance_score) if t.relevance_score is not None else None,
+        "relevance_reason": t.relevance_reason,
         "comments_fetched": t.comments_fetched,
         "posted_at": t.posted_at.isoformat() if t.posted_at else None,
     }

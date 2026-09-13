@@ -1,4 +1,7 @@
 .env
+# Bản sao lưu .env cũng chứa secret — không bao giờ commit
+.env.bak*
+.env.*.bak
 __pycache__/
 *.py[cod]
 *.egg-info/

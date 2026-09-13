@@ -26,7 +26,7 @@ from typing import Any
 from app.config import settings
 from app.crawl import http
 from app.crawl.outcomes import Outcome
-from app.services import reddit_apify
+from app.services import reddit_apify, voc_filter
 
 TOKEN_URL = "https://www.reddit.com/api/v1/access_token"
 API_BASE = "https://oauth.reddit.com"
@@ -48,6 +48,9 @@ class RedditVocResult:
     top_subreddits: list[dict] = field(default_factory=list)
     latency_ms: int = 0
     error: str | None = None
+    filter_report: dict | None = None
+    """Báo cáo lọc nhiễu — trả thẳng ra kết quả job chứ không chôn trong log.
+    Tỉ lệ loại >80% nghĩa là từ khoá quá rộng; 0% nghĩa là bộ lọc không chạy."""
     tier: str = "oauth"
     """'oauth' (T0, miễn phí) hoặc 'apify' (T1, trả phí). Phải lộ ra ngoài để biết
     một lần thu thập tốn tiền hay không, và để phát hiện khi T0 hỏng lâu ngày."""
@@ -110,6 +113,9 @@ async def collect_voc(
     threads_per_keyword: int = 50,
     comment_threads: int = 10,
     comments_per_thread: int = 60,
+    sort: str = "relevance",
+    subreddits: list[str] | None = None,
+    min_relevance: float = 0.4,
 ) -> RedditVocResult:
     """Thu thập trọn gói cho một ngách, đi theo chuỗi tầng T0 → T1.
 
@@ -124,7 +130,10 @@ async def collect_voc(
     have_oauth = bool(settings.reddit_client_id and settings.reddit_client_secret)
 
     if mode == "apify" or (mode == "auto" and not have_oauth):
-        return await _collect_via_apify(keywords, timeframe, threads_per_keyword * len(keywords))
+        return await _collect_via_apify(
+            keywords, timeframe, threads_per_keyword * len(keywords),
+            sort=sort, subreddits=subreddits, min_relevance=min_relevance,
+        )
 
     result = await _collect_via_oauth(
         keywords, timeframe, threads_per_keyword, comment_threads, comments_per_thread
@@ -133,7 +142,8 @@ async def collect_voc(
     # tụt xuống tầng trả phí để lấy lại cùng một "không có gì" là đốt tiền vô ích.
     if mode == "auto" and result.outcome in (Outcome.BLOCKED, Outcome.UPSTREAM_ERROR):
         fallback = await _collect_via_apify(
-            keywords, timeframe, threads_per_keyword * len(keywords)
+            keywords, timeframe, threads_per_keyword * len(keywords),
+            sort=sort, subreddits=subreddits, min_relevance=min_relevance,
         )
         if fallback.outcome is Outcome.OK:
             fallback.error = f"T0 thất bại ({result.error}) → đã dùng T1 Apify"
@@ -142,14 +152,31 @@ async def collect_voc(
 
 
 async def _collect_via_apify(
-    keywords: list[str], timeframe: str, max_items: int
+    keywords: list[str],
+    timeframe: str,
+    max_items: int,
+    *,
+    sort: str = "relevance",
+    subreddits: list[str] | None = None,
+    min_relevance: float = 0.4,
 ) -> RedditVocResult:
     outcome, threads, comments, latency, cost, error = await reddit_apify.collect(
-        keywords, timeframe=timeframe, max_items=max_items
+        keywords, timeframe=timeframe, max_items=max_items, sort=sort, subreddits=subreddits
     )
+
+    report = None
+    if threads:
+        threads, _dropped, report = voc_filter.filter_threads(
+            threads, keywords, min_score=min_relevance
+        )
+        kept_ids = {t["external_id"] for t in threads}
+        comments = [c for c in comments if c["thread_external_id"] in kept_ids]
+        if not threads:
+            outcome = Outcome.EMPTY
     result = RedditVocResult(
         outcome=outcome, keywords=keywords, threads=threads, comments=comments,
         latency_ms=latency, error=error, tier="apify", cost_usd=cost,
+        filter_report=report,
     )
     if threads:
         counter: Counter[str] = Counter()
