@@ -25,6 +25,25 @@ services:
       timeout: 5s
       retries: 5
 
+  # Container chạy một lần rồi thoát. Tách riêng thay vì nhét `alembic upgrade head`
+  # vào command của api: nếu cả api lẫn worker cùng migrate thì hai tiến trình đua
+  # nhau trên cùng một schema. Ở đây migrate chạy xong mới tới lượt hai cái kia.
+  migrate:
+    build: .
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/crawl_ecomerce
+    volumes:
+      # Bind mount để file migration do `alembic revision` sinh ra nằm trên host,
+      # không biến mất cùng container `--rm`.
+      - .:/app
+    depends_on:
+      db:
+        condition: service_healthy
+    command: alembic upgrade head
+    restart: "no"
+
   api:
     build: .
     ports:
@@ -39,6 +58,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - .:/app          # cần cho --reload: không mount thì sửa code không ăn
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
   worker:
@@ -53,6 +76,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - .:/app
     command: arq app.worker.WorkerSettings
 
   adminer:

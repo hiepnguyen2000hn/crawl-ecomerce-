@@ -7,13 +7,16 @@ router chỉ enqueue rồi trả 202 ngay, kết quả lấy qua GET /api/v1/ads
 """
 
 import redis.asyncio as aioredis
+from arq import cron, create_pool
 from arq.connections import RedisSettings as ArqRedisSettings
 
 from app.config import settings
 from app.crud import audit_log as audit_crud
 from app.crud import results as results_crud
 from app.database import AsyncSessionLocal
+from app.jobs.crawl_jobs import run_bol_search, run_reddit_voc, run_shopify_scan
 from app.jobs.store import JobStatus, JobStore
+from app.jobs.watchlist_jobs import run_watchlist_tick
 from app.services.apify_client import ApifyError, apify_client
 
 
@@ -75,16 +78,31 @@ async def run_facebook_ads_search(ctx: dict, job_id: str, apify_input: dict, req
 async def on_startup(ctx: dict) -> None:
     ctx["redis_client"] = aioredis.from_url(settings.redis_url)
     ctx["job_store"] = JobStore(ctx["redis_client"], settings.job_ttl_seconds)
+    # Cron cần tự enqueue job crawl → phải có pool riêng, `ctx["redis"]` của arq
+    # là connection của worker chứ không phải producer.
+    ctx["arq_pool"] = await create_pool(ArqRedisSettings.from_dsn(settings.redis_url))
 
 
 async def on_shutdown(ctx: dict) -> None:
     client = ctx.get("redis_client")
     if client is not None:
         await client.close()
+    pool = ctx.get("arq_pool")
+    if pool is not None:
+        await pool.close()
 
 
 class WorkerSettings:
-    functions = [run_facebook_ads_search]
+    functions = [
+        run_facebook_ads_search,
+        run_shopify_scan,
+        run_bol_search,
+        run_reddit_voc,
+        run_watchlist_tick,
+    ]
+    # Tick mỗi giờ; từng mục trong watchlist tự quyết đã tới hạn chưa theo
+    # `interval_hours` của nó. Xem app/jobs/watchlist_jobs.py.
+    cron_jobs = [cron(run_watchlist_tick, minute={5}, run_at_startup=False)]
     on_startup = on_startup
     on_shutdown = on_shutdown
     redis_settings = ArqRedisSettings.from_dsn(settings.redis_url)

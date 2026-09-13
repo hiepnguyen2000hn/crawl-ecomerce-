@@ -1,0 +1,262 @@
+"""Job function cho các connector tự fetch: Shopify, Bol.com, Reddit.
+
+Tách khỏi `worker.py` để file đó không phình khi thêm nguồn; `worker.py` chỉ còn
+đăng ký danh sách function.
+
+Quy ước chung với `run_facebook_ads_search`: `job_id` dùng luôn làm `request_id`
+trong `api_audit_logs` + bảng nghiệp vụ — một id duy nhất xuyên suốt một lần crawl.
+
+Mọi job đều ghi audit log kể cả khi thất bại, và **phân biệt outcome** thay vì chỉ
+success/error: `EMPTY` không phải lỗi, `PARSE_FAIL` là lỗi cần báo động.
+Xem docs/DEV-Design-Crawl-Engine.md §4.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from app.crawl.outcomes import ALERT_WORTHY, Outcome, is_failure
+from app.crud import audit_log as audit_crud
+from app.crud import ecom as ecom_crud
+from app.crud import tracking as tracking_crud
+from app.crud import voc as voc_crud
+from app.database import AsyncSessionLocal
+from app.jobs.store import JobStatus, JobStore
+from app.services import bol_client, reddit_client, shopify_client
+
+logger = logging.getLogger(__name__)
+
+
+async def _record(
+    db,
+    *,
+    job_id: str,
+    endpoint: str,
+    params: dict,
+    outcome: Outcome,
+    latency_ms: int,
+    response_data: dict | None = None,
+    error: str | None = None,
+) -> None:
+    """Ghi audit log với outcome cụ thể, không chỉ 'success'/'error'.
+
+    `status` giữ nguyên vocabulary cũ để tương thích với `/api/v1/audit-logs`,
+    outcome chi tiết đi vào `response_data` cho tới khi có bảng `crawl_attempts` riêng.
+    """
+    if outcome in ALERT_WORTHY:
+        logger.error(
+            "PARSE_FAIL tại %s — nguồn nhiều khả năng đã đổi cấu trúc. params=%s err=%s",
+            endpoint,
+            params,
+            error,
+        )
+
+    await audit_crud.create_log(
+        db,
+        request_id=job_id,
+        endpoint=endpoint,
+        request_params=params,
+        response_data={"outcome": str(outcome), **(response_data or {})},
+        status="error" if is_failure(outcome) else "success",
+        http_status_code=None,
+        latency_ms=latency_ms,
+        error_message=error,
+    )
+
+
+# ── Shopify ──────────────────────────────────────────────────────────────────
+
+
+async def run_shopify_scan(
+    ctx: dict,
+    job_id: str,
+    shop_domain: str,
+    max_pages: int,
+    currency: str | None,
+) -> None:
+    store: JobStore = ctx["job_store"]
+    await store.set_status(job_id, JobStatus.RUNNING)
+    params = {"shop_domain": shop_domain, "max_pages": max_pages, "currency": currency}
+
+    async with AsyncSessionLocal() as db:
+        result = await shopify_client.scan_store(
+            shop_domain, max_pages=max_pages, currency=currency
+        )
+
+        saved = {"total": 0, "inserted": 0, "updated": 0}
+        price_points = snapshots = 0
+        if result.products:
+            saved = await ecom_crud.upsert_products(db, result.products)
+            price_points = await ecom_crud.save_price_points(
+                db,
+                request_id=job_id,
+                source="shopify",
+                shop_domain=result.shop_domain,
+                products=result.products,
+            )
+            snapshots = await tracking_crud.save_snapshots(
+                db, source="shopify", shop_domain=result.shop_domain, products=result.products
+            )
+
+        await _record(
+            db,
+            job_id=job_id,
+            endpoint="/api/v1/ecom/shopify/scan",
+            params=params,
+            outcome=result.outcome,
+            latency_ms=result.latency_ms,
+            response_data={
+                "pages_fetched": result.pages_fetched,
+                "products": len(result.products),
+                "sample": result.raw_sample,
+            },
+            error=result.error,
+        )
+
+        payload = {
+            "request_id": job_id,
+            "shop_domain": result.shop_domain,
+            "outcome": str(result.outcome),
+            "currency": result.currency,
+            "pages_fetched": result.pages_fetched,
+            "products_found": len(result.products),
+            "products_new": saved["inserted"],
+            "products_updated": saved["updated"],
+            "price_points_written": price_points,
+            "metric_snapshots_written": snapshots,
+            "latency_ms": result.latency_ms,
+        }
+
+        if is_failure(result.outcome):
+            await store.set_status(job_id, JobStatus.FAILED, result=payload, error=result.error)
+        else:
+            await store.set_status(job_id, JobStatus.SUCCEEDED, result=payload)
+
+
+# ── Bol.com ──────────────────────────────────────────────────────────────────
+
+
+async def run_bol_search(
+    ctx: dict, job_id: str, query: str, max_pages: int, country_path: str
+) -> None:
+    store: JobStore = ctx["job_store"]
+    await store.set_status(job_id, JobStatus.RUNNING)
+    params = {"query": query, "max_pages": max_pages, "country_path": country_path}
+
+    async with AsyncSessionLocal() as db:
+        result = await bol_client.search(query, max_pages=max_pages, country_path=country_path)
+
+        saved = {"total": 0, "inserted": 0, "updated": 0}
+        price_points = snapshots = 0
+        if result.products:
+            saved = await ecom_crud.upsert_products(db, result.products)
+            price_points = await ecom_crud.save_price_points(
+                db,
+                request_id=job_id,
+                source="bol",
+                shop_domain="bol.com",
+                products=result.products,
+            )
+            snapshots = await tracking_crud.save_snapshots(
+                db, source="bol", shop_domain="bol.com", products=result.products
+            )
+
+        await _record(
+            db,
+            job_id=job_id,
+            endpoint="/api/v1/ecom/bol/search",
+            params=params,
+            outcome=result.outcome,
+            latency_ms=result.latency_ms,
+            response_data={
+                "pages_fetched": result.pages_fetched,
+                "products": len(result.products),
+                "parse_source": result.parse_source,
+            },
+            error=result.error,
+        )
+
+        payload = {
+            "request_id": job_id,
+            "query": query,
+            "outcome": str(result.outcome),
+            # Biết parser chạy nhánh nào là thông tin vận hành: khi 'json-ld' biến mất,
+            # ta biết trước khi dữ liệu bắt đầu thiếu field.
+            "parse_source": result.parse_source,
+            "pages_fetched": result.pages_fetched,
+            "products_found": len(result.products),
+            "products_new": saved["inserted"],
+            "products_updated": saved["updated"],
+            "price_points_written": price_points,
+            "metric_snapshots_written": snapshots,
+            "latency_ms": result.latency_ms,
+        }
+
+        if is_failure(result.outcome):
+            await store.set_status(job_id, JobStatus.FAILED, result=payload, error=result.error)
+        else:
+            await store.set_status(job_id, JobStatus.SUCCEEDED, result=payload)
+
+
+# ── Reddit VOC ───────────────────────────────────────────────────────────────
+
+
+async def run_reddit_voc(
+    ctx: dict,
+    job_id: str,
+    keywords: list[str],
+    timeframe: str,
+    threads_per_keyword: int,
+    comment_threads: int,
+    comments_per_thread: int,
+) -> None:
+    store: JobStore = ctx["job_store"]
+    await store.set_status(job_id, JobStatus.RUNNING)
+    params = {"keywords": keywords, "timeframe": timeframe}
+
+    async with AsyncSessionLocal() as db:
+        result = await reddit_client.collect_voc(
+            keywords,
+            timeframe=timeframe,
+            threads_per_keyword=threads_per_keyword,
+            comment_threads=comment_threads,
+            comments_per_thread=comments_per_thread,
+        )
+
+        threads_saved = comments_saved = 0
+        if result.threads:
+            # `raw` giữ nguyên payload Reddit; các field còn lại đã chuẩn hoá.
+            threads_saved = await voc_crud.upsert_threads(db, result.threads, request_id=job_id)
+        if result.comments:
+            comments_saved = await voc_crud.upsert_comments(db, result.comments)
+
+        await _record(
+            db,
+            job_id=job_id,
+            endpoint="/api/v1/voc/reddit/collect",
+            params=params,
+            outcome=result.outcome,
+            latency_ms=result.latency_ms,
+            response_data={
+                "threads": threads_saved,
+                "comments": comments_saved,
+                "top_subreddits": result.top_subreddits[:5],
+            },
+            error=result.error,
+        )
+
+        payload = {
+            "request_id": job_id,
+            "outcome": str(result.outcome),
+            "tier": result.tier,
+            "cost_usd": round(result.cost_usd, 4),
+            "threads_saved": threads_saved,
+            "comments_saved": comments_saved,
+            "top_subreddits": result.top_subreddits,
+            "latency_ms": result.latency_ms,
+        }
+
+        if is_failure(result.outcome):
+            await store.set_status(job_id, JobStatus.FAILED, result=payload, error=result.error)
+        else:
+            await store.set_status(job_id, JobStatus.SUCCEEDED, result=payload)
