@@ -10,6 +10,7 @@ Nên: **thêm model mới thì thêm một dòng vào đây.**
 from app.models.ads import AdSignal
 from app.models.ai import AiAnalysisResult, AiProviderKey, MasterPrompt
 from app.models.audit_log import ApiAuditLog
+from app.models.crawl_ops import CrawlAttempt, CrawlSourcePolicy
 from app.models.ecom import EcomPricePoint, EcomProduct
 from app.models.provider import Proxy, ProviderKey
 from app.models.results import FacebookAdsResult, GoogleTrendsResult
@@ -21,6 +22,8 @@ __all__ = [
     "AiAnalysisResult",
     "AiProviderKey",
     "ApiAuditLog",
+    "CrawlAttempt",
+    "CrawlSourcePolicy",
     "MasterPrompt",
     "EcomPricePoint",
     "EcomProduct",

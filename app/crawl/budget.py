@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 
 import httpx
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 
@@ -29,6 +30,21 @@ class BudgetExceeded(Exception):
     def __init__(self, spent: float, cap: float):
         super().__init__(f"Chi phí ${spent:.4f} vượt trần ${cap:.2f} — đã hủy run")
         self.spent, self.cap = spent, cap
+
+
+async def guard_daily_cap(db: AsyncSession, source: str, daily_budget_usd: float | None) -> None:
+    """Chặn TRƯỚC KHI vào tier đầu tiên nếu `source` đã tiêu quá `daily_budget_usd`
+    hôm nay — bước 3 trong pipeline `engine.py` (§7.3). `None` = không giới hạn.
+
+    Import trễ để tránh vòng phụ thuộc `crud.crawl_ops` ↔ `crawl.budget`.
+    """
+    if daily_budget_usd is None:
+        return
+    from app.crud.crawl_ops import spent_today_usd
+
+    spent = await spent_today_usd(db, source)
+    if spent >= daily_budget_usd:
+        raise BudgetExceeded(spent, daily_budget_usd)
 
 
 async def remaining_apify_credit(client: httpx.AsyncClient) -> float | None:

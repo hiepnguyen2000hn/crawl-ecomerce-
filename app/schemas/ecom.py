@@ -3,7 +3,22 @@ from pydantic import BaseModel, Field, field_validator
 from app.crawl.normalize import normalize_domain
 
 
-class ShopifyScanRequest(BaseModel):
+class RunScoped(BaseModel):
+    """Field chung cho mọi request khởi tạo crawl.
+
+    `run_id` do `levelup_be` phát khi mở một lượt nghiên cứu, AI Service truyền
+    nguyên si xuống đây. Nhờ nó `crawl_attempts` gộp được chi phí của nhiều lần
+    crawl khác nguồn về đúng một lượt research. Xem docs/DEV-Design-Crawl-Engine.md §6.
+    """
+
+    run_id: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Lượt research bên levelup_be. Bỏ trống khi gọi tay để debug.",
+    )
+
+
+class ShopifyScanRequest(RunScoped):
     shop_domain: str = Field(
         ...,
         description="Domain store, vd 'examplestore.com'. Nhận cả URL đầy đủ — sẽ tự cắt.",
@@ -31,7 +46,7 @@ class ShopifyScanRequest(BaseModel):
         return v.upper() if v else v
 
 
-class BolSearchRequest(BaseModel):
+class BolSearchRequest(RunScoped):
     query: str = Field(..., min_length=1, description="Từ khoá bản địa (tiếng Hà Lan cho thị trường NL)")
     max_pages: int = Field(default=3, ge=1, le=20)
     country_path: str = Field(

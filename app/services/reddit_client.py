@@ -106,52 +106,15 @@ async def _api(path: str, params: dict[str, Any]) -> tuple[Outcome | None, Any, 
     return None, data["data"], resp.latency_ms
 
 
-async def collect_voc(
-    keywords: list[str],
-    *,
-    timeframe: str = "year",
-    threads_per_keyword: int = 50,
-    comment_threads: int = 10,
-    comments_per_thread: int = 60,
-    sort: str = "relevance",
-    subreddits: list[str] | None = None,
-    min_relevance: float = 0.4,
-) -> RedditVocResult:
-    """Thu thập trọn gói cho một ngách, đi theo chuỗi tầng T0 → T1.
-
-    `timeframe="year"` khớp yêu cầu SRS "trong vòng 1 năm đổ lại".
-
-    T0 (OAuth chính thức) miễn phí nhưng cần `client_id`/`secret` — mà Reddit hiện
-    đã siết việc tạo app. Không có credential, hoặc bị chặn, thì rơi xuống T1 (Apify).
-    Tầng dưới trả về **đúng một hình dạng dữ liệu** với tầng trên nên chuyển tầng là
-    trong suốt với phần còn lại của hệ thống.
-    """
-    mode = (settings.reddit_provider or "auto").lower()
-    have_oauth = bool(settings.reddit_client_id and settings.reddit_client_secret)
-
-    if mode == "apify" or (mode == "auto" and not have_oauth):
-        return await _collect_via_apify(
-            keywords, timeframe, threads_per_keyword * len(keywords),
-            sort=sort, subreddits=subreddits, min_relevance=min_relevance,
-        )
-
-    result = await _collect_via_oauth(
-        keywords, timeframe, threads_per_keyword, comment_threads, comments_per_thread
-    )
-    # Chỉ hạ tầng khi T0 hỏng vì phía nhà cung cấp — EMPTY là câu trả lời hợp lệ,
-    # tụt xuống tầng trả phí để lấy lại cùng một "không có gì" là đốt tiền vô ích.
-    if mode == "auto" and result.outcome in (Outcome.BLOCKED, Outcome.UPSTREAM_ERROR):
-        fallback = await _collect_via_apify(
-            keywords, timeframe, threads_per_keyword * len(keywords),
-            sort=sort, subreddits=subreddits, min_relevance=min_relevance,
-        )
-        if fallback.outcome is Outcome.OK:
-            fallback.error = f"T0 thất bại ({result.error}) → đã dùng T1 Apify"
-            return fallback
-    return result
+# Việc chuyển tầng T0 → T1 KHÔNG còn nằm ở đây: `crawl/engine.py` lo, qua hai adapter
+# trong `app/sources/reddit/adapter.py`. Hai hàm dưới là hai tier, mỗi hàm chỉ biết
+# cách lấy dữ liệu của riêng nó và trả về CÙNG một `RedditVocResult`.
+#
+# Ngữ nghĩa quan trọng được engine giữ nguyên: `EMPTY` dừng cả chuỗi, không tụt xuống
+# tầng trả phí để lấy lại cùng một "không có gì".
 
 
-async def _collect_via_apify(
+async def collect_via_apify(
     keywords: list[str],
     timeframe: str,
     max_items: int,
@@ -191,7 +154,7 @@ async def _collect_via_apify(
     return result
 
 
-async def _collect_via_oauth(
+async def collect_via_oauth(
     keywords: list[str],
     timeframe: str,
     threads_per_keyword: int,

@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import logging
 
+from app.crawl import engine
+from app.crawl.contracts import Capability, FetchRequest
 from app.crawl.outcomes import ALERT_WORTHY, Outcome, is_failure
 from app.crud import audit_log as audit_crud
 from app.crud import ecom as ecom_crud
@@ -22,7 +24,6 @@ from app.crud import tracking as tracking_crud
 from app.crud import voc as voc_crud
 from app.database import AsyncSessionLocal
 from app.jobs.store import JobStatus, JobStore
-from app.services import bol_client, reddit_client, shopify_client
 
 logger = logging.getLogger(__name__)
 
@@ -73,29 +74,40 @@ async def run_shopify_scan(
     shop_domain: str,
     max_pages: int,
     currency: str | None,
+    run_id: str | None = None,
 ) -> None:
     store: JobStore = ctx["job_store"]
     await store.set_status(job_id, JobStatus.RUNNING)
     params = {"shop_domain": shop_domain, "max_pages": max_pages, "currency": currency}
 
     async with AsyncSessionLocal() as db:
-        result = await shopify_client.scan_store(
-            shop_domain, max_pages=max_pages, currency=currency
+        result = await engine.fetch(
+            FetchRequest(
+                source="shopify",
+                capability=Capability.SCAN,
+                params=params,
+                run_id=run_id,
+            ),
+            db,
+            ctx.get("redis_client"),
         )
+        meta = result.meta
+        products = result.items
+        scanned_domain = meta.get("shop_domain") or shop_domain
 
         saved = {"total": 0, "inserted": 0, "updated": 0}
         price_points = snapshots = 0
-        if result.products:
-            saved = await ecom_crud.upsert_products(db, result.products)
+        if products:
+            saved = await ecom_crud.upsert_products(db, products)
             price_points = await ecom_crud.save_price_points(
                 db,
                 request_id=job_id,
                 source="shopify",
-                shop_domain=result.shop_domain,
-                products=result.products,
+                shop_domain=scanned_domain,
+                products=products,
             )
             snapshots = await tracking_crud.save_snapshots(
-                db, source="shopify", shop_domain=result.shop_domain, products=result.products
+                db, source="shopify", shop_domain=scanned_domain, products=products
             )
 
         await _record(
@@ -106,20 +118,22 @@ async def run_shopify_scan(
             outcome=result.outcome,
             latency_ms=result.latency_ms,
             response_data={
-                "pages_fetched": result.pages_fetched,
-                "products": len(result.products),
-                "sample": result.raw_sample,
+                "pages_fetched": meta.get("pages_fetched", 0),
+                "products": len(products),
+                "sample": meta.get("raw_sample", []),
             },
             error=result.error,
         )
 
         payload = {
             "request_id": job_id,
-            "shop_domain": result.shop_domain,
+            "run_id": run_id,
+            "shop_domain": scanned_domain,
             "outcome": str(result.outcome),
-            "currency": result.currency,
-            "pages_fetched": result.pages_fetched,
-            "products_found": len(result.products),
+            "tier": result.tier_used,
+            "currency": meta.get("currency"),
+            "pages_fetched": meta.get("pages_fetched", 0),
+            "products_found": len(products),
             "products_new": saved["inserted"],
             "products_updated": saved["updated"],
             "price_points_written": price_points,
@@ -137,28 +151,45 @@ async def run_shopify_scan(
 
 
 async def run_bol_search(
-    ctx: dict, job_id: str, query: str, max_pages: int, country_path: str
+    ctx: dict,
+    job_id: str,
+    query: str,
+    max_pages: int,
+    country_path: str,
+    run_id: str | None = None,
 ) -> None:
     store: JobStore = ctx["job_store"]
     await store.set_status(job_id, JobStatus.RUNNING)
     params = {"query": query, "max_pages": max_pages, "country_path": country_path}
 
     async with AsyncSessionLocal() as db:
-        result = await bol_client.search(query, max_pages=max_pages, country_path=country_path)
+        result = await engine.fetch(
+            FetchRequest(
+                source="bol",
+                capability=Capability.SEARCH_KEYWORD,
+                params=params,
+                country=country_path,
+                run_id=run_id,
+            ),
+            db,
+            ctx.get("redis_client"),
+        )
+        meta = result.meta
+        products = result.items
 
         saved = {"total": 0, "inserted": 0, "updated": 0}
         price_points = snapshots = 0
-        if result.products:
-            saved = await ecom_crud.upsert_products(db, result.products)
+        if products:
+            saved = await ecom_crud.upsert_products(db, products)
             price_points = await ecom_crud.save_price_points(
                 db,
                 request_id=job_id,
                 source="bol",
                 shop_domain="bol.com",
-                products=result.products,
+                products=products,
             )
             snapshots = await tracking_crud.save_snapshots(
-                db, source="bol", shop_domain="bol.com", products=result.products
+                db, source="bol", shop_domain="bol.com", products=products
             )
 
         await _record(
@@ -169,22 +200,24 @@ async def run_bol_search(
             outcome=result.outcome,
             latency_ms=result.latency_ms,
             response_data={
-                "pages_fetched": result.pages_fetched,
-                "products": len(result.products),
-                "parse_source": result.parse_source,
+                "pages_fetched": meta.get("pages_fetched", 0),
+                "products": len(products),
+                "parse_source": meta.get("parse_source"),
             },
             error=result.error,
         )
 
         payload = {
             "request_id": job_id,
+            "run_id": run_id,
             "query": query,
             "outcome": str(result.outcome),
+            "tier": result.tier_used,
             # Biết parser chạy nhánh nào là thông tin vận hành: khi 'json-ld' biến mất,
             # ta biết trước khi dữ liệu bắt đầu thiếu field.
-            "parse_source": result.parse_source,
-            "pages_fetched": result.pages_fetched,
-            "products_found": len(result.products),
+            "parse_source": meta.get("parse_source"),
+            "pages_fetched": meta.get("pages_fetched", 0),
+            "products_found": len(products),
             "products_new": saved["inserted"],
             "products_updated": saved["updated"],
             "price_points_written": price_points,
@@ -212,32 +245,43 @@ async def run_reddit_voc(
     sort: str = "relevance",
     subreddits: list[str] | None = None,
     min_relevance: float = 0.25,
+    run_id: str | None = None,
 ) -> None:
     store: JobStore = ctx["job_store"]
     await store.set_status(job_id, JobStatus.RUNNING)
     params = {
-        "keywords": keywords, "timeframe": timeframe,
-        "sort": sort, "subreddits": subreddits, "min_relevance": min_relevance,
+        "keywords": keywords,
+        "timeframe": timeframe,
+        "threads_per_keyword": threads_per_keyword,
+        "comment_threads": comment_threads,
+        "comments_per_thread": comments_per_thread,
+        "sort": sort,
+        "subreddits": subreddits,
+        "min_relevance": min_relevance,
     }
 
     async with AsyncSessionLocal() as db:
-        result = await reddit_client.collect_voc(
-            keywords,
-            timeframe=timeframe,
-            threads_per_keyword=threads_per_keyword,
-            comment_threads=comment_threads,
-            comments_per_thread=comments_per_thread,
-            sort=sort,
-            subreddits=subreddits,
-            min_relevance=min_relevance,
+        result = await engine.fetch(
+            FetchRequest(
+                source="reddit",
+                capability=Capability.SEARCH_KEYWORD,
+                params=params,
+                run_id=run_id,
+            ),
+            db,
+            ctx.get("redis_client"),
         )
+        meta = result.meta
+        threads = result.items
+        comments = meta.get("comments") or []
+        top_subreddits = meta.get("top_subreddits") or []
 
         threads_saved = comments_saved = 0
-        if result.threads:
+        if threads:
             # `raw` giữ nguyên payload Reddit; các field còn lại đã chuẩn hoá.
-            threads_saved = await voc_crud.upsert_threads(db, result.threads, request_id=job_id)
-        if result.comments:
-            comments_saved = await voc_crud.upsert_comments(db, result.comments)
+            threads_saved = await voc_crud.upsert_threads(db, threads, request_id=job_id)
+        if comments:
+            comments_saved = await voc_crud.upsert_comments(db, comments)
 
         await _record(
             db,
@@ -249,20 +293,21 @@ async def run_reddit_voc(
             response_data={
                 "threads": threads_saved,
                 "comments": comments_saved,
-                "top_subreddits": result.top_subreddits[:5],
+                "top_subreddits": top_subreddits[:5],
             },
             error=result.error,
         )
 
         payload = {
             "request_id": job_id,
+            "run_id": run_id,
             "outcome": str(result.outcome),
-            "tier": result.tier,
+            "tier": result.tier_used,
             "cost_usd": round(result.cost_usd, 4),
             "threads_saved": threads_saved,
             "comments_saved": comments_saved,
-            "filter_report": result.filter_report,
-            "top_subreddits": result.top_subreddits,
+            "filter_report": meta.get("filter_report"),
+            "top_subreddits": top_subreddits,
             "latency_ms": result.latency_ms,
         }
 

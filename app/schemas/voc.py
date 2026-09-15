@@ -1,7 +1,9 @@
 from pydantic import BaseModel, Field
 
+from app.schemas.ecom import RunScoped
 
-class RedditVocRequest(BaseModel):
+
+class RedditVocRequest(RunScoped):
     keywords: list[str] = Field(
         ...,
         min_length=1,

@@ -51,7 +51,7 @@ async def scan_shopify(
     job_id = str(uuid.uuid4())
     await store.create(job_id, "shopify_scan")
     await arq.enqueue_job(
-        "run_shopify_scan", job_id, body.shop_domain, body.max_pages, body.currency
+        "run_shopify_scan", job_id, body.shop_domain, body.max_pages, body.currency, body.run_id
     )
     return JobAccepted(job_id=job_id)
 
@@ -100,7 +100,7 @@ async def search_bol(
     job_id = str(uuid.uuid4())
     await store.create(job_id, "bol_search")
     await arq.enqueue_job(
-        "run_bol_search", job_id, body.query, body.max_pages, body.country_path
+        "run_bol_search", job_id, body.query, body.max_pages, body.country_path, body.run_id
     )
     return JobAccepted(job_id=job_id)
 

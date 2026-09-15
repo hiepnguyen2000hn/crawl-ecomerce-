@@ -1,0 +1,16 @@
+[
+  {
+    "title": "Fake Widget — bàn phím cơ demo",
+    "price_minor": 199900,
+    "currency": "USD",
+    "rating": 4.6,
+    "review_count": 128
+  },
+  {
+    "title": "Fake Widget — chuột không dây demo",
+    "price_minor": 59900,
+    "currency": "USD",
+    "rating": 4.2,
+    "review_count": 41
+  }
+]

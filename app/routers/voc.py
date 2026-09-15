@@ -44,6 +44,7 @@ async def collect_reddit(
         body.sort,
         body.subreddits,
         body.min_relevance,
+        body.run_id,
     )
     return JobAccepted(job_id=job_id)
 
