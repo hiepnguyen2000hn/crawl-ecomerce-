@@ -28,6 +28,25 @@ services:
         condition: service_healthy
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
+  cloakbrowser:
+    image: cloakhq/cloakbrowser:latest
+    command: cloakserve
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9222:9222"
+    environment:
+      CLOAKBROWSER_LICENSE_KEY: ${CLOAK_LICENSE_KEY:-}
+    volumes:
+      # Persistent Chrome profiles — cookies/localStorage survive restart
+      - cloak_profiles:/profiles
+    shm_size: "2gb"        # Chrome cần shared memory, tăng nếu nhiều tab
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9222/json/version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
   adminer:
     image: adminer:latest
     ports:
@@ -38,3 +57,4 @@ services:
 
 volumes:
   pgdata:
+  cloak_profiles:
