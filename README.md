@@ -138,6 +138,11 @@ nó — **không phải lỗi cấu hình**, và cũng không sinh ra dòng `cra
 | Amazon | `vendor:apify` | `APIFY_TOKEN` + `AMAZON_APIFY_ACTOR` |
 | 1688 · Taobao | `vendor:aggregator` | `ALIBABA_AGGREGATOR_BASE` / `_KEY` / `_SECRET` |
 
+Chọn actor Amazon tại [apify.com/store](https://apify.com/store?search=amazon) — ID có
+dạng `<user>~<tên-actor>` và **phân biệt hoa thường** (`junglee~Amazon-crawler`, chữ A
+hoa). Actor nhận **URL trang tìm kiếm** chứ không nhận từ khoá rời; adapter tự dựng URL
+đó từ `marketplace` nên đổi sàn quốc gia không cần đổi gì trong actor.
+
 Tier `browser` cần `pip install playwright cloakbrowser` và container `cloakbrowser`
 đang chạy. Thiếu playwright thì tier tự loại mình, app vẫn khởi động bình thường.
 

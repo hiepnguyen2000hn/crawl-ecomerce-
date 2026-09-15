@@ -86,6 +86,23 @@ ALI_DOM_HTML = """
 </body></html>
 """
 
+#: Một item THẬT trong dataset của actor `junglee/Amazon-crawler`, chép từ README của
+#: chính actor. Giữ nguyên hình dạng gốc — đây là hợp đồng mà `_map_item` phải đọc được.
+#: Chú ý `price` là object lồng và `price.currency` là KÝ HIỆU chứ không phải mã ISO.
+AMAZON_ACTOR_ITEM = {
+    "title": "SanDisk 1TB Extreme microSDXC UHS-I Memory Card with Adapter",
+    "url": "https://www.amazon.com/dp/B09X7MPX8L",
+    "asin": "B09X7MPX8L",
+    "inStock": True,
+    "brand": "SanDisk",
+    "price": {"value": 145.5, "currency": "$"},
+    "listPrice": {"value": 299.99, "currency": "$"},
+    "stars": 4.8,
+    "reviewsCount": 36704,
+    "breadCrumbs": "Electronics › Computer Accessories › Memory Cards",
+    "thumbnailImage": "https://m.media-amazon.com/images/I/716kSUlHouL.jpg",
+}
+
 TAOBAO_HTML = """
 <html><body><script>
 g_page_config = {"mods":{"itemlist":{"data":{"auctions":[
@@ -234,9 +251,32 @@ def check_adapters() -> None:
     check("Taobao vendor — thiếu aggregator", TaobaoVendorAdapter().is_available(), False)
 
 
+def check_vendor_mapping() -> None:
+    """Map output THẬT của actor Apify (lấy từ README của junglee/Amazon-crawler)."""
+    from app.sources.amazon.vendor import _map_item
+
+    print("\n=== Map output thật của actor Amazon ===")
+    row = _map_item(AMAZON_ACTOR_ITEM, "amazon.de", "EUR")
+    check("lấy được ASIN", row["external_id"], "B09X7MPX8L")
+    check("giá nằm trong object lồng {value,currency} → 14550", row["price_min_minor"], 14550)
+    check(
+        "currency lấy theo marketplace, KHÔNG lấy ký hiệu '$' của actor",
+        row["currency"],
+        "EUR",
+    )
+    check("stars → rating", row["rating"], 4.8)
+    check("reviewsCount → review_count", row["review_count"], 36704)
+    check("brand", row["brand"], "SanDisk")
+    check("inStock → available", row["available"], True)
+    check("thumbnailImage → image_refs", row["image_refs"], [AMAZON_ACTOR_ITEM["thumbnailImage"]])
+    check("sales_volume vẫn None — Amazon không công bố", row["sales_volume"], None)
+    check("item không có asin → bỏ qua, không nổ", _map_item({"title": "x"}, "amazon.de", "EUR"), None)
+
+
 def main() -> int:
     check_parsers()
     check_adapters()
+    check_vendor_mapping()
 
     print("\n" + "=" * 70)
     if _fails:

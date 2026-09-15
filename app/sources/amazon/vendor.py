@@ -41,14 +41,20 @@ class AmazonVendorAdapter:
         currency = normalize.currency_for(marketplace)
         max_items = int(p.get("max_items", 50))
 
+        # Actor Amazon nhận **URL trang tìm kiếm**, không nhận từ khoá rời. Chính vì
+        # vậy `marketplace` không phải một tham số riêng: đổi sàn quốc gia = đổi tên
+        # miền trong URL, và `normalize.search_url()` đã dựng sẵn đúng thứ đó.
+        start_url = [{"url": normalize.search_url(p["query"], marketplace, 1)}]
+
         actor_input = {
-            # Nhiều actor đặt tên khác nhau cho cùng một thứ. Gửi cả hai biến thể rẻ
-            # hơn là đoán sai rồi tốn nguyên một lần chạy actor mới biết; actor bỏ qua
-            # trường lạ chứ không lỗi.
-            "search": p["query"],
-            "searchQuery": p["query"],
-            "domain": marketplace,
-            "maxItems": max_items,
+            # Hai actor phổ biến nhất đặt tên trường này khác nhau
+            # (`junglee/Amazon-crawler` vs `junglee/free-amazon-product-scraper`).
+            # Schema của chúng không khoá `additionalProperties`, nên gửi cả hai là an
+            # toàn và đỡ phải đổi code khi so sánh vendor.
+            "categoryOrProductUrls": start_url,
+            "categoryUrls": start_url,
+            "maxItemsPerStartUrl": max_items,
+            "scrapeProductDetails": True,
         }
 
         try:
@@ -138,8 +144,11 @@ def _map_item(raw: dict, marketplace: str, currency: str) -> dict | None:
         "title": str(_first(raw, "title", "name", "productTitle") or ""),
         "url": str(_first(raw, "url", "link", "productUrl") or f"https://www.{marketplace}/dp/{asin}"),
         "brand": _first(raw, "brand", "manufacturer"),
-        "product_type": _first(raw, "category", "productCategory"),
-        "currency": _first(raw, "currency") or currency,
+        "product_type": _first(raw, "category", "productCategory", "breadCrumbs"),
+        # KHÔNG lấy `price.currency` của actor: nó trả ký hiệu ("$"), không phải mã
+        # ISO — nhét vào cột VARCHAR(3) là sai dữ liệu. Mã tiền tệ suy ra từ
+        # marketplace mới chắc đúng.
+        "currency": currency,
         "price_min_minor": price_minor,
         "price_max_minor": price_minor,
         "rating": rating,
