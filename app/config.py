@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     app_env: str = "development"
     app_debug: bool = False
 
+    # CloakBrowser — cloakserve CDP endpoint
+    cloak_browser_url: str = "http://localhost:9222"
+    cloak_license_key: str = ""
+
     @field_validator("serpapi_keys", "openrouter_api_keys", mode="before")
     @classmethod
     def parse_comma_separated(cls, v):
