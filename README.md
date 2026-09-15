@@ -142,6 +142,34 @@ Với Bol.com, chú ý trường `parse_source` trong kết quả:
 
 ---
 
+## Browser profile (CloakBrowser) — hạ tầng cho tier T2
+
+Nguồn nào chặn HTTP client thường thì phải đi bằng trình duyệt thật. `cloakserve` là
+container Chromium đã vá để qua được Cloudflare / Datadome / FingerprintJS; mỗi
+"profile" là một danh tính riêng gồm fingerprint seed + proxy + thư mục cookie.
+
+| Method | Endpoint | Việc |
+| --- | --- | --- |
+| `POST` | `/api/v1/browser/profiles` | Tạo profile (tự sinh seed nếu không truyền) |
+| `GET` | `/api/v1/browser/profiles` | Danh sách |
+| `PATCH` | `/api/v1/browser/profiles/{id}` | Đổi proxy / nhãn / bật tắt |
+| `POST` | `/api/v1/browser/profiles/{id}/run` | Mở một URL bằng profile này |
+| `GET` | `/api/v1/browser/pool/status` | Giới hạn session đồng thời |
+
+**`fingerprint_seed` phải cố định theo profile.** Cùng seed thì canvas/WebGL/font sinh
+ra giống hệt nhau qua mọi lần chạy — đó mới là "một máy thật dùng nhiều lần". Đổi seed
+mỗi lần mở là tự khai mình là bot.
+
+RAM ~190MB mỗi session lúc rảnh, ~280MB với 3 tab. Số session song song bị chặn bởi
+`browser_pool` theo tier license (free = 1).
+
+```bash
+docker-compose up -d cloakbrowser
+curl "localhost:8000/api/v1/browser/pool/status"
+```
+
+---
+
 ## Phân loại kết quả
 
 Không gói mọi thất bại vào một rọ — mỗi loại có hành động khác nhau

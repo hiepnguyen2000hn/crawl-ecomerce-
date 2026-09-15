@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     """Reddit BẮT BUỘC UA mô tả thật dạng `platform:app-id:version (by /u/user)`;
     UA chung chung bị chặn thẳng."""
 
+    # ── CloakBrowser — cloakserve CDP endpoint (T2 tự scrape) ────────────────
+    cloak_browser_url: str = "http://localhost:9222"
+    cloak_license_key: str = ""
+
     @property
     def serpapi_keys(self) -> list[str]:
         return [k.strip() for k in self.serpapi_keys_raw.split(",") if k.strip()]

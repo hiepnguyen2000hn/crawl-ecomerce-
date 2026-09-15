@@ -13,3 +13,5 @@ beautifulsoup4==4.12.3
 html2text==2024.2.26
 lxml==5.3.0
 openpyxl==3.1.5
+playwright>=1.44.0
+cloakbrowser>=0.1.0
