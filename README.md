@@ -108,10 +108,50 @@ docker-compose run --rm migrate alembic upgrade head
 | Meta Ads Library | Apify actor | `POST /api/v1/ads/search` | ✅ |
 | Google Trends | SerpAPI, fallback pytrends | `POST /api/v1/trends/interest-over-time` | ✅ |
 | AI trích giá 1 URL | OpenRouter | `POST /api/v1/ai/analyze` | ✅ |
-| Amazon · AliExpress · 1688 · Taobao | — | — | chưa có |
+| Amazon (DE·FR·IT·ES) | T1 Apify actor → T2 CloakBrowser | `POST /api/v1/ecom/amazon/search` | ⚠️ cần key |
+| 1688 (nguồn hàng) | T1 aggregator → T2 CloakBrowser | `POST /api/v1/ecom/1688/search` | ⚠️ cần key |
+| Taobao (nguồn hàng) | T1 aggregator → T2 CloakBrowser | `POST /api/v1/ecom/taobao/search` | ⚠️ cần key |
+| AliExpress | — | — | chưa có |
 
 Mọi việc quét đều là **job bất đồng bộ**: endpoint trả `202 {job_id}`, poll kết quả qua
 `GET /api/v1/ecom/jobs/{job_id}` (hoặc `/api/v1/voc/jobs/{job_id}`).
+
+### Ba nguồn khó: Amazon · 1688 · Taobao
+
+Ba nguồn này **không** đi thẳng như Shopify/Bol.com mà đi qua **chuỗi tier**, do
+`app/crawl/engine.py` điều phối:
+
+```
+T1 vendor  (mua dữ liệu)   ──thất bại/chưa có key──▶  T2 browser (CloakBrowser)
+```
+
+Thứ tự này là quyết định **D1** trong [`docs/DEV-Design-Crawl-Engine.md`](docs/DEV-Design-Crawl-Engine.md):
+anti-bot của ba sàn này ở mức đầu tư hàng chục triệu đô, tự scrape đạt ~70% tuần đầu
+rồi tụt dần — chi phí thật nằm ở **công dev đi sửa mỗi lần sàn đổi**, không phải tiền
+proxy. Tier browser giữ lại làm dự phòng và để **đo mức độ bị chặn**.
+
+Chưa cấu hình key vendor thì `is_available()` của tier đó trả `False` và engine bỏ qua
+nó — **không phải lỗi cấu hình**, và cũng không sinh ra dòng `crawl_attempts` rác nào.
+
+| Nguồn | Tier chính | Biến env cần |
+| --- | --- | --- |
+| Amazon | `vendor:apify` | `APIFY_TOKEN` + `AMAZON_APIFY_ACTOR` |
+| 1688 · Taobao | `vendor:aggregator` | `ALIBABA_AGGREGATOR_BASE` / `_KEY` / `_SECRET` |
+
+Tier `browser` cần `pip install playwright cloakbrowser` và container `cloakbrowser`
+đang chạy. Thiếu playwright thì tier tự loại mình, app vẫn khởi động bình thường.
+
+**Giới hạn đã biết ở G1** — chưa có identity pool (proxy/cookie xoay vòng), nên:
+
+- Amazon cần residential khớp marketplace → chưa có thì hay `BLOCKED`
+- 1688/Taobao cần residential **Trung Quốc đại lục** + tài khoản đăng nhập → gần như
+  chắc chắn `BLOCKED` khi chạy tier browser
+
+Đó là kết quả **có thật và được ghi vào `crawl_attempts`**, không phải lỗi im lặng —
+và chính những dòng đó là bằng chứng để chốt việc mua tier T1.
+
+Nhịp crawl của ba nguồn được seed sẵn trong `crawl_source_policies` (Amazon 2 luồng /
+4s, hai sàn Alibaba 1 luồng / 6s). Chỉnh bằng `UPDATE`, không cần deploy.
 
 ### Xuất ra Excel
 
@@ -126,19 +166,34 @@ Excel** kèm định dạng tiền tệ theo từng dòng — vẫn lọc/sắp/
 
 ### Kiểm tra nhanh trước khi chạy job
 
-Hai endpoint đồng bộ, mỗi cái chỉ tốn 1 request — dùng để xem parser đọc được gì:
+Endpoint `/probe` chạy **đồng bộ, đúng 1 trang** — dùng để xem parser đọc được gì
+trước khi enqueue job hàng loạt:
 
 ```bash
 curl "localhost:8000/api/v1/ecom/shopify/probe?shop_domain=allbirds.com"
 curl "localhost:8000/api/v1/ecom/bol/probe?query=keukenmachine"
+curl "localhost:8000/api/v1/ecom/amazon/probe?query=luftbefeuchter&marketplace=amazon.de"
+curl "localhost:8000/api/v1/ecom/1688/probe?query=便携榨汁机"
+curl "localhost:8000/api/v1/ecom/taobao/probe?query=便携榨汁机"
 ```
 
-Với Bol.com, chú ý trường `parse_source` trong kết quả:
+Trường `parse_source` cho biết parser đang đi nhánh nào — **luôn nhìn nó trước tiên**:
 
-- `json-ld` — đang đọc dữ liệu có cấu trúc site tự công bố. **Bền**, không lo.
-- `css` — đã rơi xuống nhánh dự phòng, phụ thuộc class CSS. Dễ vỡ khi Bol đổi giao diện.
-- `null` + `outcome: PARSE_FAIL` — không đọc ra gì. Cần sửa `SELECTORS` trong
-  `app/services/bol_client.py`.
+| Nguồn | Nhánh bền | Nhánh dự phòng (dễ vỡ) | Sửa ở đâu khi hỏng |
+| --- | --- | --- | --- |
+| Bol.com | `json-ld` | `css` | `app/services/bol_client.py` |
+| Amazon | `data-asin` | — | `app/sources/amazon/normalize.py` |
+| 1688 | `embedded-json` | `dom-offer-link` | `app/sources/alibaba_1688/normalize.py` |
+| Taobao | `g_page_config` | `dom-item-link` | `app/sources/taobao/normalize.py` |
+
+`parse_source: null` + `outcome: PARSE_FAIL` nghĩa là không đọc ra gì — sàn đã đổi cấu
+trúc. Kết quả probe có kèm `html_head` (1500 ký tự đầu) để soi ngay tại chỗ.
+
+Sửa xong selector thì chạy lại bộ kiểm tra trên HTML mẫu để chắc không làm hỏng chỗ khác:
+
+```bash
+python scripts/check_parsers.py
+```
 
 ---
 
@@ -194,8 +249,24 @@ dữ liệu rỗng sẽ trôi âm thầm sang AI cho tới khi có người phá
 
 ```
 app/
-├── crawl/          khung dùng chung — outcomes · http (nhịp, UA) · normalize (tiền tệ)
-├── services/       mỗi nguồn một client
+├── crawl/          khung chịu lỗi, KHÔNG biết gì về nguồn cụ thể
+│   ├── engine.py         điều phối chuỗi tier, ghi crawl_attempts
+│   ├── contracts.py      hợp đồng mọi adapter phải theo
+│   ├── outcomes.py       phân loại kết quả + dấu hiệu bị chặn từng sàn
+│   ├── http.py           lấy HTML bằng HTTP  ─┐ cùng hình dạng trả về,
+│   ├── browser_fetch.py  lấy HTML bằng Chrome ─┘ adapter dùng cái nào cũng như nhau
+│   ├── paged_search.py   vòng lặp nhiều trang + quy tắc EMPTY/PARSE_FAIL
+│   ├── html_json.py      bóc object JSON nhúng trong JS (1688, Taobao)
+│   ├── policy.py · pacing.py · budget.py · cache.py
+│   └── normalize.py      tiền tệ, domain
+├── sources/        mỗi nguồn MỘT gói, mỗi tier MỘT adapter
+│   ├── registry.py       nguồn → chuỗi adapter (thứ tự khai = thứ tự fallback)
+│   ├── amazon/           vendor.py (T1) · browser.py (T2) · normalize.py
+│   ├── alibaba_1688/     vendor.py (T1) · browser.py (T2) · normalize.py
+│   ├── taobao/           vendor.py (T1) · browser.py (T2) · normalize.py
+│   ├── shopify/ · bol/ · reddit/
+│   └── fake/             fixture để chứng minh engine chạy đúng, không gọi mạng
+├── services/       client của dịch vụ bên ngoài (apify, aggregator, cloak_browser…)
 ├── models/         SQLAlchemy — thêm model mới nhớ khai vào __init__.py
 ├── crud/           upsert theo khoá tự nhiên, đọc phục vụ AI
 ├── routers/        FastAPI
@@ -204,6 +275,10 @@ app/
 ├── providers/      key pool · proxy pool · fallback cascade (Google Trends)
 └── worker.py       đăng ký job cho arq
 ```
+
+**Thêm một nguồn mới cần đụng đúng 4 chỗ:** tạo gói trong `sources/`, khai vào
+`registry.py`, thêm job trong `jobs/crawl_jobs.py` + `worker.py`, thêm endpoint trong
+`routers/ecom.py`. Không phải sửa `engine.py` — đó là cả mục đích của hợp đồng adapter.
 
 **Quy ước dữ liệu:**
 

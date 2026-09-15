@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field, field_validator
 
 from app.crawl.normalize import normalize_domain
+from app.sources.amazon.normalize import DEFAULT_MARKETPLACE, MARKETPLACES
 
 
 class RunScoped(BaseModel):
@@ -53,6 +54,39 @@ class BolSearchRequest(RunScoped):
         default="/nl/nl",
         description="'/nl/nl' cho Hà Lan, '/be/nl' cho Bỉ — cùng catalog, khác giá",
     )
+
+
+class AmazonSearchRequest(RunScoped):
+    query: str = Field(..., min_length=1, description="Từ khoá theo ngôn ngữ của marketplace")
+    marketplace: str = Field(
+        default=DEFAULT_MARKETPLACE,
+        description="SRS nhắm DE · FR · IT · ES. NL/BE là sân của Bol.com, không phải Amazon.",
+        examples=["amazon.de"],
+    )
+    max_pages: int = Field(default=2, ge=1, le=10, description="Chỉ dùng cho tier browser")
+    max_items: int = Field(default=50, ge=1, le=500, description="Chỉ dùng cho tier vendor")
+
+    @field_validator("marketplace")
+    @classmethod
+    def _known_marketplace(cls, v: str) -> str:
+        domain = normalize_domain(v)
+        if domain not in MARKETPLACES:
+            raise ValueError(
+                f"marketplace '{v}' chưa được hỗ trợ. Hợp lệ: {', '.join(sorted(MARKETPLACES))}"
+            )
+        return domain
+
+
+class AlibabaSearchRequest(RunScoped):
+    """Dùng chung cho 1688 và Taobao — cùng nhà aggregator, cùng tham số."""
+
+    query: str = Field(
+        ...,
+        min_length=1,
+        description="Từ khoá. Tiếng Trung cho kết quả tốt hơn hẳn tiếng Anh trên cả hai sàn.",
+        examples=["便携榨汁机"],
+    )
+    max_pages: int = Field(default=2, ge=1, le=10, description="Chỉ dùng cho tier browser")
 
 
 class JobAccepted(BaseModel):

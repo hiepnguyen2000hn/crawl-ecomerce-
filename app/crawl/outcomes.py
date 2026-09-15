@@ -75,15 +75,30 @@ CLOUDFLARE_MARKERS = (
 CAPTCHA_MARKERS = (
     "/errors/validateCaptcha",           # Amazon
     "Enter the characters you see below",  # Amazon
+    "Sorry, we just need to make sure you're not a robot",  # Amazon
     "captcha",
     "recaptcha",
+)
+
+#: Alibaba (1688 · Taobao) — xem docs/DEV-Design-Crawl-Engine.md §4.
+#:
+#: Cả hai đẩy sang trang chặn mà vẫn trả **HTTP 200**, nên nhìn status code là thấy
+#: "thành công" rồi lưu HTML rác vào DB. `_____tmd_____` và `x5secdata` là tham số
+#: anti-bot của riêng họ — đặc trưng đủ để không đụng nhầm trang sản phẩm thật.
+ALIBABA_MARKERS = (
+    "login.taobao.com",
+    "x5secdata",
+    "_____tmd_____",
+    "/punish",
 )
 
 
 def looks_blocked(body: str) -> bool:
     """Tìm dấu hiệu bị chặn trong thân phản hồi (đã 200 nhưng không phải dữ liệu)."""
     sample = body[:4000].lower()
-    return any(m.lower() in sample for m in CLOUDFLARE_MARKERS + CAPTCHA_MARKERS)
+    return any(
+        m.lower() in sample for m in CLOUDFLARE_MARKERS + CAPTCHA_MARKERS + ALIBABA_MARKERS
+    )
 
 
 def classify_status(status_code: int, body: str = "") -> Outcome | None:

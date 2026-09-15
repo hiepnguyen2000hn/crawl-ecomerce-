@@ -8,12 +8,22 @@ Architecture:
 
 RAM estimate: ~190MB idle / session, ~280MB khi có 3 tabs.
 """
+from __future__ import annotations
+
 import asyncio
 import random
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from typing import TYPE_CHECKING, AsyncGenerator
 
-from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
+# Import trễ, KHÔNG ở cấp module. `crud/browser_profile.py` chỉ cần `generate_seed()`
+# (một lời gọi random) nhưng lại kéo theo cả file này; import playwright ở cấp module
+# làm API lẫn worker không khởi động nổi trên môi trường chưa cài trình duyệt — kể cả
+# khi chỉ chạy nguồn T0 như Shopify, vốn không cần trình duyệt nào.
+#
+# Đây cũng là điều kiện để `is_available()` của các adapter T2 chạy đúng: chúng tự loại
+# mình khỏi chuỗi tier khi thiếu playwright, nhưng chỉ có tác dụng nếu app còn import được.
+if TYPE_CHECKING:
+    from playwright.async_api import Browser, BrowserContext, Page, Playwright
 
 from app.config import settings
 
@@ -72,6 +82,8 @@ async def cloak_session(
             await s.page.goto("https://example.com")
             content = await s.page.content()
     """
+    from playwright.async_api import async_playwright
+
     cloak_url = settings.cloak_browser_url.rstrip("/")
     cdp_url = f"{cloak_url}?fingerprint={fingerprint_seed}"
     if proxy_url:

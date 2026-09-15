@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.crawl import browser_fetch
 from app.crud import ecom as ecom_crud
 from app.crud import ads as ads_crud
 from app.crud import tracking as tracking_crud
@@ -24,12 +25,17 @@ from app.database import get_db
 from app.deps import get_arq, get_job_store
 from app.jobs.store import JobStore
 from app.schemas.ecom import (
+    AlibabaSearchRequest,
+    AmazonSearchRequest,
     BolSearchRequest,
     JobAccepted,
     ProductListItem,
     ShopifyScanRequest,
 )
 from app.services import bol_client, excel_export, shopify_client
+from app.sources.alibaba_1688 import normalize as alibaba_normalize
+from app.sources.amazon import normalize as amazon_normalize
+from app.sources.taobao import normalize as taobao_normalize
 
 router = APIRouter(prefix="/api/v1/ecom", tags=["E-commerce"])
 
@@ -135,6 +141,157 @@ async def probe_bol(
         ],
         "error": result.error,
     }
+
+
+# ── Amazon · 1688 · Taobao ───────────────────────────────────────────────────
+#
+# Ba nguồn này đi qua chuỗi tier (vendor trước, browser sau) do `crawl/engine.py` lo,
+# nên router chỉ enqueue — không biết và không cần biết dữ liệu sẽ tới từ tier nào.
+
+
+@router.post(
+    "/amazon/search",
+    status_code=202,
+    response_model=JobAccepted,
+    summary="Tìm sản phẩm trên Amazon theo từ khoá",
+)
+async def search_amazon(
+    body: AmazonSearchRequest,
+    store: Annotated[JobStore, Depends(get_job_store)],
+    arq=Depends(get_arq),
+) -> JobAccepted:
+    job_id = str(uuid.uuid4())
+    await store.create(job_id, "amazon_search")
+    await arq.enqueue_job(
+        "run_amazon_search",
+        job_id,
+        body.query,
+        body.marketplace,
+        body.max_pages,
+        body.max_items,
+        body.run_id,
+    )
+    return JobAccepted(job_id=job_id)
+
+
+@router.post(
+    "/1688/search",
+    status_code=202,
+    response_model=JobAccepted,
+    summary="Tìm nguồn hàng trên 1688 theo từ khoá (SRS Bước 4)",
+)
+async def search_1688(
+    body: AlibabaSearchRequest,
+    store: Annotated[JobStore, Depends(get_job_store)],
+    arq=Depends(get_arq),
+) -> JobAccepted:
+    job_id = str(uuid.uuid4())
+    await store.create(job_id, "1688_search")
+    await arq.enqueue_job("run_1688_search", job_id, body.query, body.max_pages, body.run_id)
+    return JobAccepted(job_id=job_id)
+
+
+@router.post(
+    "/taobao/search",
+    status_code=202,
+    response_model=JobAccepted,
+    summary="Tìm nguồn hàng trên Taobao theo từ khoá (SRS Bước 4)",
+)
+async def search_taobao(
+    body: AlibabaSearchRequest,
+    store: Annotated[JobStore, Depends(get_job_store)],
+    arq=Depends(get_arq),
+) -> JobAccepted:
+    job_id = str(uuid.uuid4())
+    await store.create(job_id, "taobao_search")
+    await arq.enqueue_job("run_taobao_search", job_id, body.query, body.max_pages, body.run_id)
+    return JobAccepted(job_id=job_id)
+
+
+# ── Probe: kiểm chứng parser bằng HTML thật ──────────────────────────────────
+#
+# Ba nguồn trên đều dựa vào cấu trúc trang (tier browser) hoặc hình dạng output của
+# vendor — cả hai đều có thể đổi mà không báo trước. Probe chạy ĐỒNG BỘ đúng 1 trang
+# qua tier browser để trả lời một câu: "parser đang đọc ra cái gì?".
+#
+# Luôn probe trước khi enqueue job hàng loạt. Đây chính là quy trình đã cứu Bol.com
+# khỏi việc ghi hàng nghìn bản ghi rỗng vào DB.
+
+
+async def _probe_browser_source(
+    *, source: str, url: str, selector: str, parse, settle_ms: int
+) -> dict:
+    resp = await browser_fetch.fetch_page(
+        url, source=source, wait_for=selector, settle_ms=settle_ms
+    )
+
+    items: list[dict] = []
+    parse_source = None
+    if resp.outcome is None:
+        items, parse_source = parse(resp.text)
+
+    return {
+        "source": source,
+        "url": url,
+        "outcome": str(resp.outcome) if resp.outcome else ("OK" if items else "PARSE_FAIL"),
+        # 'embedded-json' / 'data-asin' là nhánh bền; tụt xuống nhánh DOM nghĩa là
+        # cấu trúc đã đổi và ta đang đi đường dễ vỡ hơn.
+        "parse_source": parse_source,
+        "fingerprint_seed": resp.fingerprint_seed,
+        "final_url": resp.final_url,
+        "products_found": len(items),
+        "sample": [
+            {
+                "title": p["title"],
+                "price_min_minor": p["price_min_minor"],
+                "currency": p["currency"],
+                "seller": p["seller"],
+                "sales_volume": p["sales_volume"],
+                "url": p["url"],
+            }
+            for p in items[:5]
+        ],
+        # Đầu HTML để soi bằng mắt khi parser không đọc ra gì — không có nó thì việc
+        # sửa selector thành mò kim đáy bể.
+        "html_head": resp.text[:1500],
+        "error": resp.error,
+    }
+
+
+@router.get("/amazon/probe", summary="Kiểm tra parser Amazon đang đọc được gì (đồng bộ, 1 trang)")
+async def probe_amazon(
+    query: str = Query(..., min_length=1),
+    marketplace: str = Query(default=amazon_normalize.DEFAULT_MARKETPLACE),
+) -> dict:
+    return await _probe_browser_source(
+        source="amazon",
+        url=amazon_normalize.search_url(query, marketplace, 1),
+        selector="div[data-asin]",
+        parse=lambda html: amazon_normalize.parse_search(html, marketplace),
+        settle_ms=browser_fetch.DEFAULT_SETTLE_MS,
+    )
+
+
+@router.get("/1688/probe", summary="Kiểm tra parser 1688 đang đọc được gì (đồng bộ, 1 trang)")
+async def probe_1688(query: str = Query(..., min_length=1)) -> dict:
+    return await _probe_browser_source(
+        source="alibaba_1688",
+        url=alibaba_normalize.search_url(query, 1),
+        selector="a[href*='detail.1688.com/offer/']",
+        parse=alibaba_normalize.parse_search,
+        settle_ms=4000,
+    )
+
+
+@router.get("/taobao/probe", summary="Kiểm tra parser Taobao đang đọc được gì (đồng bộ, 1 trang)")
+async def probe_taobao(query: str = Query(..., min_length=1)) -> dict:
+    return await _probe_browser_source(
+        source="taobao",
+        url=taobao_normalize.search_url(query, 1),
+        selector="a[href*='item.htm']",
+        parse=taobao_normalize.parse_search,
+        settle_ms=4000,
+    )
 
 
 # ── Job status ───────────────────────────────────────────────────────────────

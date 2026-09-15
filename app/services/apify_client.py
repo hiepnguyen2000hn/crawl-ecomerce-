@@ -9,6 +9,7 @@ from app.crawl import budget
 
 APIFY_BASE_URL = "https://api.apify.com/v2"
 ACTOR_ID = "igolaizola~facebook-ad-library-scraper"
+"""Actor mặc định — Facebook Ad Library. Nguồn khác truyền `actor_id` riêng."""
 POLL_INTERVAL = 3   # seconds between status checks
 TIMEOUT = 300       # max wait seconds for actor run
 
@@ -23,13 +24,21 @@ class ApifyClient:
     def __init__(self):
         self._headers = {"Authorization": f"Bearer {settings.apify_token}"}
 
-    async def run_actor(self, input_data: dict[str, Any]) -> tuple[list[dict], int]:
+    async def run_actor(
+        self, input_data: dict[str, Any], actor_id: str | None = None
+    ) -> tuple[list[dict], int]:
         """
         Start actor run, poll until finished, return (items, latency_ms).
         Raises ApifyError on failure, BudgetExceeded khi chạm trần chi phí.
+
+        `actor_id` để trống thì dùng actor Facebook Ad Library. Truyền vào để chạy
+        actor của nguồn khác (Amazon...) — trần chi phí và vòng poll dùng chung,
+        không nguồn nào được phép tự viết lại phần đó.
         """
         if not settings.apify_token:
             raise ApifyError("APIFY_TOKEN not configured")
+
+        actor = actor_id or ACTOR_ID
 
         start = time.monotonic()
 
@@ -40,7 +49,7 @@ class ApifyClient:
 
             # Start the run
             run_resp = await client.post(
-                f"{APIFY_BASE_URL}/acts/{ACTOR_ID}/runs",
+                f"{APIFY_BASE_URL}/acts/{actor}/runs",
                 json=input_data,
             )
             if run_resp.status_code not in (200, 201):

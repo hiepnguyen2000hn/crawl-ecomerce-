@@ -65,6 +65,162 @@ async def _record(
     )
 
 
+# ── Tìm kiếm trên sàn: Amazon · 1688 · Taobao ────────────────────────────────
+#
+# Ba nguồn này cùng một khuôn: tìm theo từ khoá → upsert sản phẩm → ghi điểm giá +
+# ảnh chụp chỉ số → ghi audit → cập nhật job store. Gói vào một chỗ thay vì chép ba
+# lần: đổi cách ghi audit hay đổi payload trả ra chỉ phải sửa ở đây.
+#
+# `run_shopify_scan` / `run_bol_search` bên dưới giữ nguyên bản riêng — chúng có sẵn
+# trước helper này và Shopify còn khác khuôn thật (quét trọn catalog, tự dò tiền tệ,
+# domain đến từ kết quả chứ không từ tham số).
+
+
+async def _run_marketplace_search(
+    ctx: dict,
+    job_id: str,
+    *,
+    source: str,
+    endpoint: str,
+    shop_domain: str,
+    params: dict,
+    run_id: str | None,
+) -> None:
+    store: JobStore = ctx["job_store"]
+    await store.set_status(job_id, JobStatus.RUNNING)
+
+    async with AsyncSessionLocal() as db:
+        result = await engine.fetch(
+            FetchRequest(
+                source=source,
+                capability=Capability.SEARCH_KEYWORD,
+                params=params,
+                run_id=run_id,
+            ),
+            db,
+            ctx.get("redis_client"),
+        )
+        meta = result.meta
+        products = result.items
+        # Amazon tách dòng theo marketplace (giá amazon.de khác amazon.fr), nên domain
+        # thật đến từ meta; hai sàn Alibaba thì cố định.
+        domain = meta.get("marketplace") or shop_domain
+
+        saved = {"total": 0, "inserted": 0, "updated": 0}
+        price_points = snapshots = 0
+        if products:
+            saved = await ecom_crud.upsert_products(db, products)
+            price_points = await ecom_crud.save_price_points(
+                db, request_id=job_id, source=source, shop_domain=domain, products=products
+            )
+            snapshots = await tracking_crud.save_snapshots(
+                db, source=source, shop_domain=domain, products=products
+            )
+
+        await _record(
+            db,
+            job_id=job_id,
+            endpoint=endpoint,
+            params=params,
+            outcome=result.outcome,
+            latency_ms=result.latency_ms,
+            response_data={
+                "tier": result.tier_used,
+                "products": len(products),
+                "pages_fetched": meta.get("pages_fetched", 0),
+                "parse_source": meta.get("parse_source"),
+            },
+            error=result.error,
+        )
+
+        payload = {
+            "request_id": job_id,
+            "run_id": run_id,
+            "source": source,
+            "shop_domain": domain,
+            "outcome": str(result.outcome),
+            # Tier nào phục vụ được là thông tin vận hành quan trọng nhất ở đây: khi
+            # tier vendor (trả tiền) im lặng tụt xuống browser (miễn phí nhưng dễ vỡ),
+            # ta phải thấy ngay chứ không đợi tới lúc dữ liệu bắt đầu thiếu.
+            "tier": result.tier_used,
+            "cost_usd": round(result.cost_usd, 4),
+            "parse_source": meta.get("parse_source"),
+            "pages_fetched": meta.get("pages_fetched", 0),
+            "products_found": len(products),
+            "products_new": saved["inserted"],
+            "products_updated": saved["updated"],
+            "price_points_written": price_points,
+            "metric_snapshots_written": snapshots,
+            "latency_ms": result.latency_ms,
+        }
+
+        if is_failure(result.outcome):
+            await store.set_status(job_id, JobStatus.FAILED, result=payload, error=result.error)
+        else:
+            await store.set_status(job_id, JobStatus.SUCCEEDED, result=payload)
+
+
+async def run_amazon_search(
+    ctx: dict,
+    job_id: str,
+    query: str,
+    marketplace: str,
+    max_pages: int,
+    max_items: int,
+    run_id: str | None = None,
+) -> None:
+    await _run_marketplace_search(
+        ctx,
+        job_id,
+        source="amazon",
+        endpoint="/api/v1/ecom/amazon/search",
+        shop_domain=marketplace,
+        params={
+            "query": query,
+            "marketplace": marketplace,
+            "max_pages": max_pages,
+            "max_items": max_items,
+        },
+        run_id=run_id,
+    )
+
+
+async def run_1688_search(
+    ctx: dict,
+    job_id: str,
+    query: str,
+    max_pages: int,
+    run_id: str | None = None,
+) -> None:
+    await _run_marketplace_search(
+        ctx,
+        job_id,
+        source="alibaba_1688",
+        endpoint="/api/v1/ecom/1688/search",
+        shop_domain="1688.com",
+        params={"query": query, "max_pages": max_pages},
+        run_id=run_id,
+    )
+
+
+async def run_taobao_search(
+    ctx: dict,
+    job_id: str,
+    query: str,
+    max_pages: int,
+    run_id: str | None = None,
+) -> None:
+    await _run_marketplace_search(
+        ctx,
+        job_id,
+        source="taobao",
+        endpoint="/api/v1/ecom/taobao/search",
+        shop_domain="taobao.com",
+        params={"query": query, "max_pages": max_pages},
+        run_id=run_id,
+    )
+
+
 # ── Shopify ──────────────────────────────────────────────────────────────────
 
 

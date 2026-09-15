@@ -15,7 +15,14 @@ from app.crud import ads as ads_crud
 from app.crud import audit_log as audit_crud
 from app.crud import results as results_crud
 from app.database import AsyncSessionLocal
-from app.jobs.crawl_jobs import run_bol_search, run_reddit_voc, run_shopify_scan
+from app.jobs.crawl_jobs import (
+    run_1688_search,
+    run_amazon_search,
+    run_bol_search,
+    run_reddit_voc,
+    run_shopify_scan,
+    run_taobao_search,
+)
 from app.jobs.store import JobStatus, JobStore
 from app.jobs.watchlist_jobs import run_watchlist_tick
 from app.services import ads_normalize
@@ -125,6 +132,9 @@ class WorkerSettings:
         run_shopify_scan,
         run_bol_search,
         run_reddit_voc,
+        run_amazon_search,
+        run_1688_search,
+        run_taobao_search,
         run_watchlist_tick,
     ]
     # Tick mỗi giờ; từng mục trong watchlist tự quyết đã tới hạn chưa theo

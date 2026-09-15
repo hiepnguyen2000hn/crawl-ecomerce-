@@ -50,6 +50,21 @@ class Settings(BaseSettings):
     cloak_browser_url: str = "http://localhost:9222"
     cloak_license_key: str = ""
 
+    # ── Amazon · 1688 · Taobao — tier T1 (mua dữ liệu) ───────────────────────
+    # Ba nguồn này ưu tiên vendor, tự scrape chỉ là dự phòng (quyết định D1,
+    # docs/DEV-Design-Crawl-Engine.md). Để trống thì `is_available()` của adapter
+    # vendor trả False và engine bỏ qua tier đó — không phải lỗi cấu hình.
+    amazon_apify_actor: str = ""
+    """Actor Apify cho Amazon, ví dụ 'junglee~amazon-crawler'. Để trong env chứ không
+    hard-code vì docs §2 yêu cầu chạy thử 100 request thật với vài vendor rồi mới ký
+    hợp đồng năm — so sánh được thì phải đổi được bằng một dòng env."""
+
+    alibaba_aggregator_base: str = ""
+    """Ví dụ 'https://api.onebound.cn/{platform}/api_call.php'. Chỗ `{platform}` được
+    thay bằng '1688' hoặc 'taobao' — một biến env phục vụ cả hai nguồn."""
+    alibaba_aggregator_key: str = ""
+    alibaba_aggregator_secret: str = ""
+
     @property
     def serpapi_keys(self) -> list[str]:
         return [k.strip() for k in self.serpapi_keys_raw.split(",") if k.strip()]
