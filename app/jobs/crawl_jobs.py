@@ -191,6 +191,8 @@ async def run_1688_search(
     query: str,
     max_pages: int,
     run_id: str | None = None,
+    max_items: int = 50,
+    include_details: bool = False,
 ) -> None:
     await _run_marketplace_search(
         ctx,
@@ -198,7 +200,12 @@ async def run_1688_search(
         source="alibaba_1688",
         endpoint="/api/v1/ecom/1688/search",
         shop_domain="1688.com",
-        params={"query": query, "max_pages": max_pages},
+        params={
+            "query": query,
+            "max_pages": max_pages,
+            "max_items": max_items,
+            "include_details": include_details,
+        },
         run_id=run_id,
     )
 
@@ -313,10 +320,20 @@ async def run_bol_search(
     max_pages: int,
     country_path: str,
     run_id: str | None = None,
+    max_items: int = 50,
+    fetch_details: bool = False,
 ) -> None:
     store: JobStore = ctx["job_store"]
     await store.set_status(job_id, JobStatus.RUNNING)
-    params = {"query": query, "max_pages": max_pages, "country_path": country_path}
+    # `max_pages` cho tier browser, `max_items`/`fetch_details` cho tier vendor — engine
+    # chuyển hết xuống, adapter nào dùng cái của adapter đó.
+    params = {
+        "query": query,
+        "max_pages": max_pages,
+        "country_path": country_path,
+        "max_items": max_items,
+        "fetch_details": fetch_details,
+    }
 
     async with AsyncSessionLocal() as db:
         result = await engine.fetch(

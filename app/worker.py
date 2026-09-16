@@ -140,6 +140,16 @@ class WorkerSettings:
     # Tick mỗi giờ; từng mục trong watchlist tự quyết đã tới hạn chưa theo
     # `interval_hours` của nó. Xem app/jobs/watchlist_jobs.py.
     cron_jobs = [cron(run_watchlist_tick, minute={5}, run_at_startup=False)]
+    # PHẢI lớn hơn `apify_client.TIMEOUT` (300s), nếu không arq giết job đúng lúc vòng
+    # poll Apify còn đang chạy — và ta mất dữ liệu ĐÃ TRẢ TIỀN.
+    #
+    # Đã xảy ra thật ngày 16/09 với 1688: actor chạy xong, trả 50 sản phẩm, tính $0,05;
+    # arq hết 300s mặc định nên huỷ job trước khi kịp upsert. Dataset vẫn còn trên Apify
+    # nên cứu lại được, nhưng chỉ trong 7 ngày (§9) — quá hạn là mất cả dữ liệu lẫn tiền.
+    #
+    # 1688 là nguồn chậm nhất: mỗi lần chặn thì actor lùi rồi thử pool proxy khác, một
+    # lần chạy 50 sản phẩm mất 115–235 giây. Để 600s cho có biên.
+    job_timeout = 600
     on_startup = on_startup
     on_shutdown = on_shutdown
     redis_settings = ArqRedisSettings.from_dsn(settings.redis_url)

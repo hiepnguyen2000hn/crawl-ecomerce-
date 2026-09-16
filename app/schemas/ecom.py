@@ -49,7 +49,18 @@ class ShopifyScanRequest(RunScoped):
 
 class BolSearchRequest(RunScoped):
     query: str = Field(..., min_length=1, description="Từ khoá bản địa (tiếng Hà Lan cho thị trường NL)")
-    max_pages: int = Field(default=3, ge=1, le=20)
+    max_pages: int = Field(default=3, ge=1, le=20, description="Chỉ dùng cho tier browser")
+    max_items: int = Field(
+        default=50, ge=1, le=500, description="Chỉ dùng cho tier vendor — mỗi item là tiền"
+    )
+    fetch_details: bool = Field(
+        default=False,
+        description=(
+            "Vào trang chi tiết từng sản phẩm để lấy mô tả · đặc điểm · danh mục. "
+            "Trang kết quả tìm kiếm của Bol KHÔNG có ba thứ đó. Đắt hơn ~3,3 lần "
+            "($0,01/SP so với $0,003) nên chỉ bật cho sản phẩm đã vào shortlist."
+        ),
+    )
     country_path: str = Field(
         default="/nl/nl",
         description="'/nl/nl' cho Hà Lan, '/be/nl' cho Bỉ — cùng catalog, khác giá",
@@ -87,6 +98,13 @@ class AlibabaSearchRequest(RunScoped):
         examples=["便携榨汁机"],
     )
     max_pages: int = Field(default=2, ge=1, le=10, description="Chỉ dùng cho tier browser")
+    max_items: int = Field(
+        default=50, ge=1, le=500, description="Chỉ dùng cho tier vendor — mỗi item là tiền"
+    )
+    include_details: bool = Field(
+        default=False,
+        description="Vào trang chi tiết để lấy bậc giá theo số lượng. Đắt hơn 4 lần.",
+    )
 
 
 class JobAccepted(BaseModel):

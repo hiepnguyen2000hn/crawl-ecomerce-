@@ -59,6 +59,34 @@ class Settings(BaseSettings):
     hard-code vì docs §2 yêu cầu chạy thử 100 request thật với vài vendor rồi mới ký
     hợp đồng năm — so sánh được thì phải đổi được bằng một dòng env."""
 
+    bol_apify_actor: str = ""
+    """Actor Apify cho Bol.com, ví dụ 'studio-amba~bol-scraper'. Để trống thì tier
+    vendor tự loại mình và Bol đi bằng scraper tự viết (cần IP không bị 403).
+
+    Hai ứng viên đánh đổi khác nhau — xem docstring `app/sources/bol/vendor.py`:
+    `studio-amba~bol-scraper` giá công khai nhưng không có mô tả;
+    `abotapi~bol-com-scraper` có `fetchDetails` nhưng giá sự kiện chưa công khai."""
+
+    # ── AliExpress — tier T0, API chính thức (quyết định §2.1 DEV-Design-Crawl-Engine)
+    # Khác mọi nguồn khác trong repo: AliExpress KHÔNG ký bằng bearer token mà ký từng
+    # request (App Key + Secret + HMAC-SHA256 trên chuỗi tham số sắp theo ASCII). Vì vậy
+    # nó cần một client riêng, không tái dùng được `apify_client`/`serpapi_client`.
+    aliexpress_app_key: str = ""
+    aliexpress_app_secret: str = ""
+    aliexpress_api_base: str = "https://api-sg.aliexpress.com/sync"
+    """Gateway Singapore. Đổi sang `https://api-us.aliexpress.com/sync` nếu app đăng ký
+    ở vùng US — sai vùng thì trả lỗi chữ ký chứ không báo sai gateway."""
+    aliexpress_tracking_id: str = ""
+    """PID/tracking id của tài khoản affiliate. Bắt buộc với `aliexpress.affiliate.*`."""
+    aliexpress_access_token: str = ""
+    """Chỉ cần cho nhóm `aliexpress.ds.*` (dropshipping) — nhóm này đòi OAuth của một
+    tài khoản đã uỷ quyền, khác với affiliate vốn chỉ cần app key + secret."""
+
+    alibaba_1688_apify_actor: str = ""
+    """Actor Apify cho 1688, ví dụ 'piotrv1001~1688-listings-scraper'. Tier này chen
+    giữa `vendor:aggregator` (chưa mua key) và `browser` (thiếu residential TQ nên gần
+    như luôn BLOCKED) — nhờ nó mà 1688 có dữ liệu thật để đánh giá trước khi ký năm."""
+
     alibaba_aggregator_base: str = ""
     """Ví dụ 'https://api.onebound.cn/{platform}/api_call.php'. Chỗ `{platform}` được
     thay bằng '1688' hoặc 'taobao' — một biến env phục vụ cả hai nguồn."""

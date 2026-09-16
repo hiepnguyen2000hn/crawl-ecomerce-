@@ -106,7 +106,8 @@ async def search_bol(
     job_id = str(uuid.uuid4())
     await store.create(job_id, "bol_search")
     await arq.enqueue_job(
-        "run_bol_search", job_id, body.query, body.max_pages, body.country_path, body.run_id
+        "run_bol_search", job_id, body.query, body.max_pages, body.country_path,
+        body.run_id, body.max_items, body.fetch_details,
     )
     return JobAccepted(job_id=job_id)
 
@@ -187,7 +188,8 @@ async def search_1688(
 ) -> JobAccepted:
     job_id = str(uuid.uuid4())
     await store.create(job_id, "1688_search")
-    await arq.enqueue_job("run_1688_search", job_id, body.query, body.max_pages, body.run_id)
+    await arq.enqueue_job("run_1688_search", job_id, body.query, body.max_pages, body.run_id,
+        body.max_items, body.include_details,)
     return JobAccepted(job_id=job_id)
 
 

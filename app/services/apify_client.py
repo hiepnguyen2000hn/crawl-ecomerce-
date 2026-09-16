@@ -47,14 +47,27 @@ class ApifyClient:
             if blocked:
                 raise ApifyError(blocked)
 
-            # Start the run
+            # `maxTotalChargeUsd` là trần do CHÍNH APIFY áp, khác hẳn vòng poll bên dưới:
+            # nền tảng từ chối/dừng run khi chạm mức này, không phụ thuộc vào việc worker
+            # của ta có còn sống để poll và gọi abort hay không. Vòng poll giữ nguyên làm
+            # lớp thứ hai — mất mạng giữa chừng thì lớp này vẫn còn.
+            #
+            # Nó cũng quyết định actor có khởi động được không: Apify giữ trước một khoản
+            # cho mỗi run actor trả phí, và từ chối với `not-enough-usage-to-run-paid-actor`
+            # nếu credit còn lại thấp hơn `minimalMaxTotalChargeUsd` của actor đó.
             run_resp = await client.post(
                 f"{APIFY_BASE_URL}/acts/{actor}/runs",
+                params={"maxTotalChargeUsd": settings.apify_max_cost_per_run_usd},
                 json=input_data,
             )
             if run_resp.status_code not in (200, 201):
+                # 402 + 'not-enough-usage-to-run-paid-actor' KHÔNG phải hết credit của ta:
+                # actor đòi giữ trước `minimalMaxTotalChargeUsd` cao hơn số credit còn lại
+                # (có actor đặt $5/run). Đổi actor là xong, nâng gói cũng xong — nhưng đó
+                # là hai quyết định khác nhau, nên thông báo phải nói rõ chứ không gộp vào
+                # "hết quota".
                 raise ApifyError(
-                    f"Failed to start actor: {run_resp.text}",
+                    f"Failed to start actor {actor}: {run_resp.text}",
                     status_code=run_resp.status_code,
                 )
             run_data = run_resp.json().get("data", {})

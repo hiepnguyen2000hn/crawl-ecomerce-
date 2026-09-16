@@ -144,7 +144,7 @@ def _map_item(raw: dict, marketplace: str, currency: str) -> dict | None:
         "title": str(_first(raw, "title", "name", "productTitle") or ""),
         "url": str(_first(raw, "url", "link", "productUrl") or f"https://www.{marketplace}/dp/{asin}"),
         "brand": _first(raw, "brand", "manufacturer"),
-        "product_type": _first(raw, "category", "productCategory", "breadCrumbs"),
+        "product_type": _as_text(_first(raw, "category", "productCategory", "breadCrumbs")),
         # KHÔNG lấy `price.currency` của actor: nó trả ký hiệu ("$"), không phải mã
         # ISO — nhét vào cột VARCHAR(3) là sai dữ liệu. Mã tiền tệ suy ra từ
         # marketplace mới chắc đúng.
@@ -156,7 +156,7 @@ def _map_item(raw: dict, marketplace: str, currency: str) -> dict | None:
         "sales_volume": None,  # Amazon không công bố — xem docs §2.2
         "bestseller_rank": _int_or_none(_first(raw, "bestSellersRank", "bsr", "salesRank")),
         "available": _first(raw, "inStock", "available"),
-        "seller": _first(raw, "seller", "sellerName", "soldBy"),
+        "seller": _as_text(_first(raw, "seller", "sellerName", "soldBy")),
         "is_sponsored": _first(raw, "isSponsored", "sponsored"),
         "image_refs": images,
         "raw": raw,
@@ -175,6 +175,27 @@ def _map_item(raw: dict, marketplace: str, currency: str) -> dict | None:
             else []
         ),
     }
+
+
+def _as_text(value: Any) -> str | None:
+    """Ép về chuỗi cho các cột VARCHAR.
+
+    Mỗi actor trả một hình dạng khác nhau cho cùng một trường: `junglee~Amazon-crawler`
+    trả `seller` là **object** (`{name, id, url, ...}`) và `breadCrumbs` có thể là
+    **list**, trong khi actor rút gọn trả chuỗi. Không ép ở đây thì asyncpg ném
+    `DataError: expected str, got dict` ngay lúc upsert — cả lô sản phẩm mất trắng dù
+    actor đã chạy xong và đã tính tiền.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, dict):
+        return _as_text(_first(value, "name", "sellerName", "businessName", "title", "id"))
+    if isinstance(value, (list, tuple)):
+        parts = [t for v in value if (t := _as_text(v))]
+        return " > ".join(parts) or None
+    return str(value)
 
 
 def _int_or_none(value: Any) -> int | None:
